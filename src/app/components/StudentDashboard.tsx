@@ -30,6 +30,7 @@ interface Task {
 
 export function StudentDashboard({ userName, isLightGradient, setIsLightGradient, isSnowEnabled, setIsSnowEnabled }: StudentDashboardProps) {
   const [showAddForm, setShowAddForm] = useState(false);
+  const [addMode, setAddMode] = useState<'selection' | 'text' | 'voice' | 'photo'>('selection');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [completedTasks, setCompletedTasks] = useState<Task[]>([]);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -124,6 +125,7 @@ export function StudentDashboard({ userName, isLightGradient, setIsLightGradient
             setNewTask(prev => ({ ...prev, title: finalTranscript }));
           } finally {
             setIsParsing(false);
+            setAddMode('text');
           }
         }
       };
@@ -141,8 +143,8 @@ export function StudentDashboard({ userName, isLightGradient, setIsLightGradient
       const reader = new FileReader();
       reader.onloadend = () => {
         setUploadedImage(reader.result as string);
-        // В будущем здесь можно добавить OCR для распознавания текста с изображения
-        setNewTask({ ...newTask, title: `Задание из изображения (${file.name})` });
+        setNewTask(prev => ({ ...prev, title: `Задание из изображения (${file.name})` }));
+        setAddMode('text');
       };
       reader.readAsDataURL(file);
     }
@@ -172,6 +174,7 @@ export function StudentDashboard({ userName, isLightGradient, setIsLightGradient
       alert('Ошибка при обращении к нейросети');
     } finally {
       setIsParsing(false);
+      setAddMode('text');
     }
   };
 
@@ -206,6 +209,21 @@ export function StudentDashboard({ userName, isLightGradient, setIsLightGradient
     }
   };
 
+  const closeAddForm = () => {
+    setShowAddForm(false);
+    setAddMode('selection');
+    setNewTask({
+      title: '',
+      subject: '',
+      difficulty: 'Средне',
+      deadline: '',
+      description: '',
+      duration: '',
+      isPriority: false,
+    });
+    setUploadedImage(null);
+  };
+
   const handleAddTask = (e: React.FormEvent) => {
     e.preventDefault();
     const task: Task = {
@@ -220,17 +238,7 @@ export function StudentDashboard({ userName, isLightGradient, setIsLightGradient
       createdAt: Date.now(),
     };
     setTasks([...tasks, task]);
-    setNewTask({
-      title: '',
-      subject: '',
-      difficulty: 'Средне',
-      deadline: '',
-      description: '',
-      duration: '',
-      isPriority: false,
-    });
-    setUploadedImage(null);
-    setShowAddForm(false);
+    closeAddForm();
   };
 
   const sortedTasks = [...tasks].sort((a, b) => {
@@ -577,7 +585,16 @@ export function StudentDashboard({ userName, isLightGradient, setIsLightGradient
                                   <img
                                     src={task.screenshot}
                                     alt="Скриншот"
-                                    className="w-12 h-12 rounded-lg object-cover border border-white/10 shrink-0"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const link = document.createElement('a');
+                                      link.href = task.screenshot;
+                                      link.download = `screenshot-${task.id}.png`;
+                                      document.body.appendChild(link);
+                                      link.click();
+                                      document.body.removeChild(link);
+                                    }}
+                                    className="w-12 h-12 rounded-lg object-cover border border-white/10 shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
                                   />
                                 )}
                               </div>
@@ -688,8 +705,95 @@ export function StudentDashboard({ userName, isLightGradient, setIsLightGradient
                     className="bg-[#141414]/90 backdrop-blur-3xl rounded-2xl md:rounded-3xl p-4 md:p-8 border border-white/10 shadow-2xl w-full max-w-2xl relative overflow-hidden shrink-0 my-auto"
                   >
                   <div className="absolute inset-0 bg-gradient-to-b from-white/5 to-transparent pointer-events-none" />
-                  <h3 className="text-lg md:text-2xl font-medium mb-3 md:mb-6 text-white/90 relative z-10">Новая задача</h3>
+                  <h3 className="text-lg md:text-2xl font-medium mb-3 md:mb-6 text-white/90 relative z-10 text-center">
+                    {addMode === 'selection' ? 'Выберите формат ввода' : addMode === 'voice' ? 'Голосовой ввод' : 'Новая задача'}
+                  </h3>
 
+                  {addMode === 'selection' ? (
+                    <div className="flex flex-col gap-4 relative z-10">
+                      <button onClick={() => setAddMode('text')} className="flex items-center gap-4 p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-left w-full">
+                        <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center text-primary shrink-0">
+                          <FileText className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <h4 className="text-white font-medium text-lg">Текстовый ввод</h4>
+                          <p className="text-white/50 text-sm">Заполнить форму вручную</p>
+                        </div>
+                      </button>
+                      <button onClick={() => { setAddMode('voice'); handleVoiceInput(); }} className="flex items-center gap-4 p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-left w-full">
+                        <div className="w-12 h-12 rounded-full bg-[#10b981]/20 flex items-center justify-center text-[#10b981] shrink-0">
+                          <Mic className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <h4 className="text-white font-medium text-lg">Голосовой ввод</h4>
+                          <p className="text-white/50 text-sm">Продиктовать задачу ИИ</p>
+                        </div>
+                      </button>
+                      <div className="relative">
+                        <button onClick={() => document.getElementById('imageUploadFormat')?.click()} className="flex items-center gap-4 p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-left w-full">
+                          <div className="w-12 h-12 rounded-full bg-[#f59e0b]/20 flex items-center justify-center text-[#f59e0b] shrink-0">
+                            <Image className="w-6 h-6" />
+                          </div>
+                          <div>
+                            <h4 className="text-white font-medium text-lg">По фото</h4>
+                            <p className="text-white/50 text-sm">Загрузить фото задания</p>
+                          </div>
+                        </button>
+                        <input
+                          type="file"
+                          id="imageUploadFormat"
+                          accept="image/*"
+                          onChange={handleImageUpload}
+                          className="hidden"
+                        />
+                      </div>
+                      
+                      <div className="flex flex-col sm:flex-row gap-3 pt-4">
+                        <motion.button
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          type="button"
+                          onClick={closeAddForm}
+                          className="w-full px-6 py-3.5 bg-white/5 text-white/80 font-medium rounded-xl border border-white/10 hover:bg-white/10 transition-all"
+                        >
+                          Отмена
+                        </motion.button>
+                      </div>
+                    </div>
+                  ) : addMode === 'voice' ? (
+                    <div className="flex flex-col items-center justify-center py-8 relative z-10 text-center">
+                      <motion.div
+                        className={`w-24 h-24 rounded-full flex items-center justify-center mb-6 transition-all ${
+                          isRecording 
+                            ? 'bg-red-500/20 text-red-400 shadow-[0_0_30px_rgba(239,68,68,0.5)] border border-red-500/50' 
+                            : isParsing 
+                              ? 'bg-primary/20 text-primary shadow-[0_0_20px_rgba(139,92,246,0.3)] border border-primary/30'
+                              : 'bg-white/5 text-white/60'
+                        }`}
+                      >
+                        {isParsing ? <Loader2 className="w-10 h-10 animate-spin" /> : <Mic className={`w-10 h-10 ${isRecording ? 'animate-pulse' : ''}`} />}
+                      </motion.div>
+
+                      <h3 className="text-xl font-medium text-white mb-2">
+                        {isRecording ? 'Слушаю вас...' : isParsing ? 'Обработка ИИ...' : 'Подготовка...'}
+                      </h3>
+                      <p className="text-white/50 max-w-xs mx-auto mb-6">
+                        {isRecording 
+                          ? 'Продиктуйте название и условия задачи' 
+                          : isParsing 
+                            ? 'Нейросеть извлекает данные из аудио' 
+                            : 'Разрешите доступ к микрофону'}
+                      </p>
+
+                      <button 
+                        onClick={() => setAddMode('selection')}
+                        disabled={isRecording || isParsing}
+                        className="text-white/50 hover:text-white transition-colors text-sm disabled:opacity-50"
+                      >
+                        Назад к выбору формата
+                      </button>
+                    </div>
+                  ) : (
                   <form onSubmit={handleAddTask} className="space-y-3 md:space-y-5 relative z-10">
                     <div className="space-y-2">
                       <label className="text-xs font-medium text-white/60 ml-1">Название задачи</label>
@@ -702,40 +806,7 @@ export function StudentDashboard({ userName, isLightGradient, setIsLightGradient
                           required
                           className="w-full min-w-0 px-3 md:px-4 py-3 md:py-3.5 pr-20 md:pr-24 bg-black/40 text-white rounded-xl border border-white/10 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-white/20"
                         />
-                        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                          <motion.button
-                            type="button"
-                            whileHover={{ scale: 1.1 }}
-                            whileTap={{ scale: 0.95 }}
-                            onClick={handleVoiceInput}
-                            disabled={isParsing || isRecording}
-                            className={`p-2 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
-                              isRecording 
-                                ? 'bg-primary/20 text-primary shadow-[0_0_15px_rgba(139,92,246,0.5)]' 
-                                : 'bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80'
-                            }`}
-                            title="Голосовой ввод"
-                          >
-                            <Mic className={`w-4 h-4 ${isRecording ? 'animate-pulse' : ''}`} />
-                          </motion.button>
-                          <motion.button
-                            type="button"
-                            whileHover={{ scale: 1.1 }}
-                            whileTap={{ scale: 0.95 }}
-                            onClick={() => document.getElementById('imageUpload')?.click()}
-                            className="p-2 rounded-lg bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80 transition-all"
-                            title="Загрузить изображение"
-                          >
-                            <Image className="w-4 h-4" />
-                          </motion.button>
-                          <input
-                            type="file"
-                            id="imageUpload"
-                            accept="image/*"
-                            onChange={handleImageUpload}
-                            className="hidden"
-                          />
-                        </div>
+                        
                       </div>
                       {isRecording && (
                         <motion.p
@@ -873,7 +944,7 @@ export function StudentDashboard({ userName, isLightGradient, setIsLightGradient
                         whileHover={{ scale: 1.02 }}
                         whileTap={{ scale: 0.98 }}
                         type="button"
-                        onClick={() => setShowAddForm(false)}
+                        onClick={closeAddForm}
                         className="w-full sm:w-auto px-6 py-3.5 bg-white/5 text-white/80 font-medium rounded-xl border border-white/10 hover:bg-white/10 transition-all"
                       >
                         Отмена
@@ -888,6 +959,7 @@ export function StudentDashboard({ userName, isLightGradient, setIsLightGradient
                       </motion.button>
                     </div>
                   </form>
+                  )}
                 </motion.div>
                 </div>
               </motion.div>

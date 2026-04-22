@@ -7,8 +7,8 @@ import { TeacherDashboard } from './components/TeacherDashboard';
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(true);
-  const [userName, setUserName] = useState('Мария Ивановна');
-  const [userRole, setUserRole] = useState<'student' | 'teacher' | 'parent' | null>('teacher');
+  const [userName, setUserName] = useState('Алексей');
+  const [userRole, setUserRole] = useState<'student' | 'teacher' | 'parent' | null>('student');
   const [isLightGradient, setIsLightGradient] = useState(() => {
     if (typeof window !== 'undefined') {
       return window.innerWidth >= 768;

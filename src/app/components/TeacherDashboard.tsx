@@ -587,24 +587,6 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                     </button>
                   </div>
 
-                  <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/10">
-                    <div>
-                      <h3 className="text-white font-medium">Снег</h3>
-                      <p className="text-white/50 text-sm mt-1">Падающий снег на фоне</p>
-                    </div>
-                    <button
-                      onClick={() => setIsSnowEnabled(!isSnowEnabled)}
-                      className={`relative w-14 h-7 rounded-full transition-colors ${
-                        isSnowEnabled ? 'bg-primary' : 'bg-white/20'
-                      }`}
-                    >
-                      <div
-                        className={`absolute top-0.5 left-0.5 w-6 h-6 bg-white rounded-full transition-transform ${
-                          isSnowEnabled ? 'translate-x-7' : 'translate-x-0'
-                        }`}
-                      />
-                    </button>
-                  </div>
                 </div>
               </div>
             </motion.div>

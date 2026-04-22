@@ -1,7 +1,7 @@
 
-  # улучши стиль дизайна
+  # RezoFlow
 
-  This is a code bundle for улучши стиль дизайна. The original project is available at https://www.figma.com/design/6AT0pKiyN6xcvVAvjUWe75/%D1%83%D0%BB%D1%83%D1%87%D1%88%D0%B8-%D1%81%D1%82%D0%B8%D0%BB%D1%8C-%D0%B4%D0%B8%D0%B7%D0%B0%D0%B9%D0%BD%D0%B0.
+  This is a code bundle for RezoFlow. The original project is available at https://www.figma.com/design/6AT0pKiyN6xcvVAvjUWe75/RezoFlow.
 
   ## Running the code
 
