@@ -2,13 +2,13 @@ import { useState } from 'react';
 import Snowfall from 'react-snowfall';
 import { RegisterForm } from './components/RegisterForm';
 import { StudentDashboard } from './components/StudentDashboard';
-import { TeacherDashboard } from './components/TeacherDashboard';
 import { ParentDashboard } from './components/ParentDashboard';
+import { TeacherDashboard } from './components/TeacherDashboard';
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(true);
-  const [userName, setUserName] = useState('Алексей');
-  const [userRole, setUserRole] = useState<'student' | 'teacher' | 'parent' | null>('student');
+  const [userName, setUserName] = useState('Мария Ивановна');
+  const [userRole, setUserRole] = useState<'student' | 'teacher' | 'parent' | null>('teacher');
   const [isLightGradient, setIsLightGradient] = useState(() => {
     if (typeof window !== 'undefined') {
       return window.innerWidth >= 768;
@@ -41,7 +41,15 @@ export default function App() {
     }
 
     if (userRole === 'teacher') {
-      return <TeacherDashboard userName={userName} />;
+      return (
+        <TeacherDashboard
+          userName={userName}
+          isLightGradient={isLightGradient}
+          setIsLightGradient={setIsLightGradient}
+          isSnowEnabled={isSnowEnabled}
+          setIsSnowEnabled={setIsSnowEnabled}
+        />
+      );
     }
 
     if (userRole === 'parent') {
