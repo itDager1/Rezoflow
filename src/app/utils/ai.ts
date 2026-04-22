@@ -11,83 +11,86 @@ export interface ParsedTask {
 }
 
 export async function parseTaskWithAI(input: string, imageUrl?: string | null): Promise<ParsedTask> {
-  const prompt = `
-Ты интеллектуальный помощник для школьника. Твоя задача — извлечь информацию о домашнем задании из текста (или описания картинки) и вернуть её строго в формате JSON.
-Текущая дата: ${new Date().toISOString().split('T')[0]}.
-Если дата не указана явно, ставь дату на завтра или через пару дней.
-Сложность должна быть одной из: "Легко", "Средне", "Сложно".
-Предмет должен быть с заглавной буквы.
+  // Имитация задержки AI обработки
+  await new Promise(resolve => setTimeout(resolve, 1500));
 
-Входные данные: ${input}
+  // Простой парсинг на основе ключевых слов
+  const lowerInput = input.toLowerCase();
 
-Верни JSON со следующей структурой:
-{
-  "title": "Краткое название задачи",
-  "subject": "Предмет (например, Математика, Русский язык)",
-  "difficulty": "Средне",
-  "deadline": "YYYY-MM-DD",
-  "duration": "Оценка времени (например, 30 мин, 1 час)",
-  "description": "Подробное описание задачи на основе ввода",
-  "isPriority": false
-}
-`;
-
-  const messages: any[] = [
-    {
-      role: "user",
-      content: []
-    }
-  ];
-
-  if (imageUrl) {
-    messages[0].content.push({
-      type: "image_url",
-      image_url: {
-        url: imageUrl
-      }
-    });
+  // Определение предмета
+  let subject = 'Разное';
+  if (lowerInput.includes('математик') || lowerInput.includes('алгебр') || lowerInput.includes('геометр') || lowerInput.includes('уравнен')) {
+    subject = 'Математика';
+  } else if (lowerInput.includes('русск') || lowerInput.includes('литерату')) {
+    subject = 'Русский язык';
+  } else if (lowerInput.includes('англ') || lowerInput.includes('english')) {
+    subject = 'Английский язык';
+  } else if (lowerInput.includes('физик')) {
+    subject = 'Физика';
+  } else if (lowerInput.includes('хими')) {
+    subject = 'Химия';
+  } else if (lowerInput.includes('биолог')) {
+    subject = 'Биология';
+  } else if (lowerInput.includes('истор')) {
+    subject = 'История';
+  } else if (lowerInput.includes('географ')) {
+    subject = 'География';
+  } else if (lowerInput.includes('информатик') || lowerInput.includes('программ')) {
+    subject = 'Информатика';
   }
 
-  messages[0].content.push({
-    type: "text",
-    text: prompt
-  });
+  // Определение сложности
+  let difficulty: 'Легко' | 'Средне' | 'Сложно' = 'Средне';
+  if (lowerInput.includes('легк') || lowerInput.includes('прост')) {
+    difficulty = 'Легко';
+  } else if (lowerInput.includes('сложн') || lowerInput.includes('труд')) {
+    difficulty = 'Сложно';
+  }
 
-  try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": window.location.origin,
-        "X-Title": "School Task AI"
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash", // Good for multi-modal and fast text parsing
-        response_format: { type: "json_object" },
-        messages: messages
-      })
-    });
+  // Определение срока
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  let deadline = tomorrow.toISOString().split('T')[0];
 
-    if (!response.ok) {
-      throw new Error(`API Error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    const content = data.choices[0].message.content;
-    const parsed = JSON.parse(content);
-    
-    return {
-      title: parsed.title || input.substring(0, 50),
-      subject: parsed.subject || 'Разное',
-      difficulty: parsed.difficulty || 'Средне',
-      deadline: parsed.deadline || new Date(Date.now() + 86400000).toISOString().split('T')[0],
-      duration: parsed.duration || '30 мин',
-      description: parsed.description || input,
-      isPriority: parsed.isPriority || false
+  const dateMatch = input.match(/(\d{1,2})\s*(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)/i);
+  if (dateMatch) {
+    const months: {[key: string]: number} = {
+      'января': 0, 'февраля': 1, 'марта': 2, 'апреля': 3, 'мая': 4, 'июня': 5,
+      'июля': 6, 'августа': 7, 'сентября': 8, 'октября': 9, 'ноября': 10, 'декабря': 11
     };
-  } catch (error) {
-    console.error("AI Parsing Error:", error);
-    throw error;
+    const day = parseInt(dateMatch[1]);
+    const month = months[dateMatch[2].toLowerCase()];
+    const date = new Date(new Date().getFullYear(), month, day);
+    deadline = date.toISOString().split('T')[0];
   }
+
+  // Определение длительности
+  let duration = '30 мин';
+  if (lowerInput.includes('быстр') || lowerInput.includes('коротк')) {
+    duration = '15 мин';
+  } else if (lowerInput.includes('долг') || lowerInput.includes('много')) {
+    duration = '1-2 часа';
+  }
+
+  // Приоритет
+  const isPriority = lowerInput.includes('срочн') || lowerInput.includes('важн') || lowerInput.includes('контрольн');
+
+  // Извлечение названия (первые 60 символов или до точки)
+  let title = input.trim();
+  const firstSentence = title.split(/[.!?]/)[0];
+  if (firstSentence.length > 0 && firstSentence.length < 100) {
+    title = firstSentence;
+  } else if (title.length > 60) {
+    title = title.substring(0, 60) + '...';
+  }
+
+  return {
+    title: title || 'Новое задание',
+    subject,
+    difficulty,
+    deadline,
+    duration,
+    description: input || 'Описание не указано',
+    isPriority
+  };
 }
