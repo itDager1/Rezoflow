@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Calendar, FileText, Star, CheckCircle2, Upload, X, ImageIcon } from 'lucide-react';
+import { Calendar, FileText, Star, CheckCircle2, Upload, X, ImageIcon, User } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export interface Task {
@@ -12,6 +12,11 @@ export interface Task {
   isPriority: boolean;
   duration?: string;
   screenshot?: string;
+  status?: 'pending' | 'approved' | 'rejected';
+  submissionId?: string;
+  fromTeacher?: boolean;
+  teacherName?: string;
+  teacherEmail?: string;
 }
 
 interface TaskCardProps {
@@ -30,7 +35,7 @@ export function TaskCard({ task, onComplete, isArchived }: TaskCardProps) {
     Сложно: 'bg-red-500/10 text-red-400 border-red-500/20 shadow-[0_0_10px_rgba(239,68,68,0.1)]',
   };
 
-  const difficultyXp = { Легко: 8, Средне: 20, Сложно: 50 };
+  const difficultyXp: Record<string, number> = { Легко: 8, Средне: 20, Сложно: 50, '': 20 };
 
   const handleScreenshotUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -86,7 +91,7 @@ export function TaskCard({ task, onComplete, isArchived }: TaskCardProps) {
           <h3 className="text-xl font-medium tracking-tight text-white/90 group-hover:text-primary transition-colors duration-300 leading-snug">
             {task.title}
           </h3>
-          <p className="text-white/50 mt-2 text-sm leading-relaxed font-light">{task.description}</p>
+          <p className="text-white/50 mt-2 text-sm leading-relaxed font-light whitespace-pre-wrap">{task.description}</p>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
@@ -96,9 +101,39 @@ export function TaskCard({ task, onComplete, isArchived }: TaskCardProps) {
           <span className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${difficultyColors[task.difficulty]}`}>
             {task.difficulty}
           </span>
+          {task.teacherName && (
+             <div className="relative group/teacher">
+               <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 cursor-help">
+                 <User className="w-3.5 h-3.5" />
+                 {task.teacherName}
+               </span>
+               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-max max-w-[200px] opacity-0 group-hover/teacher:opacity-100 transition-opacity pointer-events-none z-50">
+                 <div className="bg-[#1A1A1A] text-white/80 text-[10px] py-1.5 px-3 rounded-lg border border-white/10 shadow-xl whitespace-pre-wrap">
+                   {(() => {
+                     try {
+                       if (task.teacherEmail) {
+                         const saved = localStorage.getItem(`rezoflow_teacher_subjects_${task.teacherEmail}`);
+                         if (saved) {
+                           const subjects = JSON.parse(saved);
+                           if (Array.isArray(subjects) && subjects.length > 0) {
+                             return `Ведёт предметы:\n${subjects.join(', ')}`;
+                           }
+                         }
+                       }
+                     } catch {}
+                     return "Предметы не указаны";
+                   })()}
+                 </div>
+               </div>
+             </div>
+          )}
           {!isArchived && (
-             <span className="px-3 py-1.5 bg-primary/10 rounded-lg text-xs font-medium text-primary border border-primary/20 shadow-[0_0_10px_rgba(139,92,246,0.1)]">
-               +{difficultyXp[task.difficulty]} XP
+             <span className={`px-3 py-1.5 rounded-lg text-xs font-medium border shadow-[0_0_10px_rgba(139,92,246,0.1)] ${
+               task.fromTeacher
+                 ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
+                 : 'bg-primary/10 text-primary border-primary/20'
+             }`}>
+               {task.fromTeacher ? `+${difficultyXp[task.difficulty]} XP после проверки` : `+${difficultyXp[task.difficulty]} XP`}
              </span>
           )}
         </div>
@@ -174,7 +209,7 @@ export function TaskCard({ task, onComplete, isArchived }: TaskCardProps) {
                       type="submit"
                       className="w-full mt-3 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white text-sm font-medium rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.3)] hover:shadow-[0_0_25px_rgba(34,197,94,0.5)] transition-all disabled:opacity-50 disabled:cursor-not-allowed border border-white/10"
                    >
-                      Отправить и получить +{difficultyXp[task.difficulty]} XP
+                      {task.fromTeacher ? 'Отправить на проверку учителю' : `Завершить и получить +${difficultyXp[task.difficulty]} XP`}
                    </button>
                 </div>
              </motion.form>

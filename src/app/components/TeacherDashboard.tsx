@@ -1,21 +1,26 @@
 // v2
-import { useState } from 'react';
-import { GraduationCap, Plus, Calendar, Users, BookOpen, Clock, FileText, User, Settings, X, Camera, CheckCircle, XCircle, Eye, Mic, Image as ImageIcon, Loader2, Sparkles } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Plus, Calendar, Users, FileText, User, Settings, X, Camera, CheckCircle, XCircle, Eye, Mic, Image as ImageIcon, Loader2, Sparkles, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { parseTaskWithAI } from '../utils/ai';
+import { parseTaskWithAI, transcribeAudio } from '../utils/ai';
+import { apiRequest } from '../utils/api';
+import { ClassAssignmentInfo } from './ClassAssignmentInfo';
+import { TeacherSubmissionsView } from './TeacherSubmissionsView';
 
 interface TeacherDashboardProps {
   userName: string;
+  userEmail: string;
   isLightGradient: boolean;
   setIsLightGradient: (value: boolean) => void;
   isSnowEnabled: boolean;
   setIsSnowEnabled: (value: boolean) => void;
+  onLogout?: () => void;
 }
 
 interface Submission {
   id: number;
   studentName: string;
-  screenshot?: string;
+  screenshotUrl?: string;
   submittedAt: number;
   status: 'pending' | 'approved' | 'rejected';
   xp: number;
@@ -25,34 +30,132 @@ interface Assignment {
   id: number;
   title: string;
   subject: string;
-  class: string;
+  class: string | string[];
   deadline: string;
   studentsCount: number;
   description?: string;
   submissions: Submission[];
 }
 
-export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient, isSnowEnabled, setIsSnowEnabled }: TeacherDashboardProps) {
+export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLightGradient, isSnowEnabled, setIsSnowEnabled, onLogout }: TeacherDashboardProps) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchAssignments = useCallback(async () => {
+    if (!userEmail) return;
+    try {
+      const data = await apiRequest<Assignment[]>(`/assignments/teacher?email=${encodeURIComponent(userEmail)}`);
+      setAssignments(data);
+    } catch (err) {
+      console.error('Failed to fetch assignments:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [userEmail]);
+
+  useEffect(() => {
+    fetchAssignments();
+    // Poll for new submissions every 10 seconds
+    const interval = setInterval(fetchAssignments, 10000);
+    return () => clearInterval(interval);
+  }, [fetchAssignments]);
+
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showCheckModal, setShowCheckModal] = useState(false);
   const [selectedSubmission, setSelectedSubmission] = useState<{assignment: Assignment, submission: Submission} | null>(null);
-  const [avatar, setAvatar] = useState<string | null>(null);
+  const [avatar, setAvatar] = useState<string | null>(() => {
+    try { return localStorage.getItem('rezoflow_teacher_avatar'); } catch { return null; }
+  });
+  const [subjects, setSubjects] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(`rezoflow_teacher_subjects_${userEmail}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [activeTab, setActiveTab] = useState<'assignments' | 'check'>('assignments');
 
   const [isRecording, setIsRecording] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [addMode, setAddMode] = useState<'selection' | 'text' | 'voice'>('selection');
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const [voiceStep, setVoiceStep] = useState<'idle' | 'recording' | 'processing'>('idle');
+  const speechTranscriptRef = useRef('');
+  const stopRecordingRef = useRef<(() => void) | null>(null);
+  const speechRecognitionRef = useRef<any>(null);
 
   const [newAssignment, setNewAssignment] = useState({
     title: '',
     subject: '',
-    class: '',
+    classes: [] as string[],
     deadline: '',
     description: '',
   });
+  const [classDigit, setClassDigit] = useState('');
+  const [classLetter, setClassLetter] = useState('');
+
+  useEffect(() => {
+    try {
+      if (avatar) localStorage.setItem('rezoflow_teacher_avatar', avatar);
+      else localStorage.removeItem('rezoflow_teacher_avatar');
+    } catch {}
+  }, [avatar]);
+
+  useEffect(() => {
+    try {
+      if (userEmail) {
+        localStorage.setItem(`rezoflow_teacher_subjects_${userEmail}`, JSON.stringify(subjects));
+      }
+    } catch {}
+  }, [subjects, userEmail]);
+
+  useEffect(() => {
+    const doCleanup = async () => {
+      const cleanupKey = 'rezoflow_cleanup_cmd_teacher_5';
+      const hasCleaned = localStorage.getItem(cleanupKey);
+      if (!hasCleaned && !isLoading) {
+        console.log('Running requested system cleanup (Teacher)...');
+        
+        // 1. Delete all assignments from the API if they exist
+        if (assignments.length > 0) {
+          try {
+            await Promise.all(assignments.map(a => 
+              apiRequest(`/assignments/${a.id}`, { method: 'DELETE' })
+            ));
+          } catch (e) {
+            console.error('Failed to delete some assignments:', e);
+          }
+        }
+        
+        // 2. Clear all local storage records for students (tasks, xp, completed)
+        const keysToRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && (
+            key.startsWith('rezoflow_student_tasks_') ||
+            key.startsWith('rezoflow_student_completed_') ||
+            key.startsWith('rezoflow_student_xp_') ||
+            key.startsWith('rezoflow_student_notifications_') ||
+            key.startsWith('rezoflow_ai_chat')
+          )) {
+            keysToRemove.push(key);
+          }
+        }
+        keysToRemove.forEach(k => localStorage.removeItem(k));
+        
+        localStorage.setItem(cleanupKey, 'true');
+        
+        // Refresh to get empty state
+        window.location.reload();
+      }
+    };
+    
+    doCleanup();
+  }, [assignments, isLoading]);
 
   const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -69,74 +172,148 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-        alert('Голосовой ввод не поддерживается в вашем браузере');
-        stream.getTracks().forEach(track => track.stop());
-        return;
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+        ? 'audio/ogg;codecs=opus'
+        : 'audio/mp4';
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      const chunks: BlobPart[] = [];
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+
+      speechTranscriptRef.current = '';
+      setLiveTranscript('');
+      setVoiceStep('recording');
+      setIsRecording(true);
+
+      const SpeechRecognitionAPI = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognitionAPI) {
+        const recognition = new SpeechRecognitionAPI();
+        speechRecognitionRef.current = recognition;
+        recognition.lang = 'ru-RU';
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.onresult = (event: any) => {
+          let interim = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            if (event.results[i].isFinal) {
+              speechTranscriptRef.current += event.results[i][0].transcript + ' ';
+            } else {
+              interim += event.results[i][0].transcript;
+            }
+          }
+          setLiveTranscript((speechTranscriptRef.current + interim).trim());
+        };
+        recognition.onerror = (event: any) => { console.warn('Speech Recognition error:', event.error); };
+        try { recognition.start(); } catch (e) { console.warn(e); }
       }
 
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      const recognition = new SpeechRecognition();
-      recognition.lang = 'ru-RU';
-      recognition.continuous = false;
-      recognition.interimResults = true;
-
-      let finalTranscript = '';
-
-      recognition.onstart = () => {
-        setIsRecording(true);
-      };
-
-      recognition.onresult = (event: any) => {
-        let currentTranscript = '';
-        for (let i = 0; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
-          } else {
-            currentTranscript += event.results[i][0].transcript;
-          }
+      const processAfterStop = async () => {
+        if (speechRecognitionRef.current) {
+          try { speechRecognitionRef.current.stop(); } catch (_) {}
+          speechRecognitionRef.current = null;
         }
-        setNewAssignment(prev => ({ ...prev, title: finalTranscript + currentTranscript }));
-      };
-
-      recognition.onerror = (event: any) => {
-        console.error('Ошибка распознавания речи:', event.error);
-        setIsRecording(false);
         stream.getTracks().forEach(track => track.stop());
-        if (event.error !== 'no-speech') {
-          alert('Ошибка микрофона. Убедитесь, что он подключен и работает.');
-        }
-      };
-
-      recognition.onend = async () => {
         setIsRecording(false);
-        stream.getTracks().forEach(track => track.stop());
+        await new Promise(resolve => setTimeout(resolve, 400));
 
-        if (finalTranscript.trim()) {
-          setIsParsing(true);
-          try {
-            const parsed = await parseTaskWithAI(finalTranscript, null);
-            setNewAssignment(prev => ({
-              ...prev,
-              title: parsed.title,
-              subject: parsed.subject,
-              class: '',
-              deadline: parsed.deadline,
-              description: parsed.description,
-            }));
-          } catch (error) {
-            console.error('Ошибка при обработке голосового ввода через AI:', error);
-            alert('Не удалось обработать голосовой ввод. Попробуйте еще раз.');
-            setNewAssignment(prev => ({ ...prev, title: finalTranscript }));
-          } finally {
-            setIsParsing(false);
+        const transcript = speechTranscriptRef.current.trim();
+        setVoiceStep('processing');
+        setIsParsing(true);
+
+        try {
+          let textForAI = transcript;
+          if (!textForAI || textForAI.length < 3) {
+            const audioBlob = new Blob(chunks, { type: mimeType });
+            if (audioBlob.size < 1000) {
+              setVoiceStep('idle');
+              setIsParsing(false);
+              setLiveTranscript('');
+              alert('Запись слишком короткая. Попробуйте ещё раз.');
+              return;
+            }
+            const whisperTranscript = await transcribeAudio(audioBlob);
+            if (!whisperTranscript) {
+              setVoiceStep('idle');
+              setIsParsing(false);
+              alert('Не удалось распознать речь. Попробуйте ещё раз.');
+              return;
+            }
+            textForAI = whisperTranscript;
+            setLiveTranscript(whisperTranscript);
           }
+
+          const parsed = await parseTaskWithAI(textForAI, null);
+          setNewAssignment(prev => ({
+            ...prev,
+            title: parsed.title,
+            subject: parsed.subject,
+            deadline: parsed.deadline,
+            description: parsed.description,
+          }));
+          setClassDigit('');
+          setClassLetter('');
+          setLiveTranscript('');
+          setVoiceStep('idle');
+          setAddMode('text');
+        } catch (error) {
+          console.error('Ошибка при обработке голосового ввода:', error);
+          setVoiceStep('idle');
+          alert('Ошибка при обработке записи. Попробуйте ещё раз.');
+        } finally {
+          setIsParsing(false);
         }
       };
 
-      recognition.start();
+      mediaRecorder.onstop = processAfterStop;
+
+      const audioContext = new AudioContext();
+      const analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+      analyser.fftSize = 1024;
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      mediaRecorder.start(100);
+
+      let silenceStart = 0;
+      let hasSpeech = false;
+      const MAX_DURATION = 60000;
+      const SILENCE_THRESHOLD = 12;
+      const SILENCE_DURATION = 2500;
+
+      const maxTimer = setTimeout(() => {
+        if (mediaRecorder.state === 'recording') mediaRecorder.stop();
+        audioContext.close();
+      }, MAX_DURATION);
+
+      const stopRecording = () => {
+        clearTimeout(maxTimer);
+        audioContext.close();
+        if (mediaRecorder.state === 'recording') mediaRecorder.stop();
+      };
+
+      stopRecordingRef.current = stopRecording;
+
+      const checkSilence = () => {
+        if (mediaRecorder.state !== 'recording') { clearTimeout(maxTimer); audioContext.close(); return; }
+        analyser.getByteFrequencyData(dataArray);
+        const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+        if (avg > SILENCE_THRESHOLD) { hasSpeech = true; silenceStart = 0; }
+        else if (hasSpeech) {
+          if (silenceStart === 0) silenceStart = Date.now();
+          if (Date.now() - silenceStart > SILENCE_DURATION) { stopRecording(); return; }
+        }
+        requestAnimationFrame(checkSilence);
+      };
+      setTimeout(() => requestAnimationFrame(checkSilence), 1500);
+
     } catch (err) {
       console.error('Ошибка доступа к микрофону:', err);
+      setIsRecording(false);
+      setVoiceStep('idle');
       alert('Не удалось получить доступ к микрофону. Разрешите браузеру использовать микрофон в настройках сайта.');
     }
   };
@@ -145,9 +322,28 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setUploadedImage(reader.result as string);
-        setNewAssignment({ ...newAssignment, title: `Задание из изображения (${file.name})` });
+      reader.onloadend = async () => {
+        const dataUrl = reader.result as string;
+        setUploadedImage(dataUrl);
+        setAddMode('text');
+        setIsParsing(true);
+        try {
+          const parsed = await parseTaskWithAI('Распознай задание на этом изображении. Определи его суть, установи предмет, сроки и подробное описание.', dataUrl);
+          setNewAssignment(prev => ({
+            ...prev,
+            title: parsed.title,
+            subject: parsed.subject,
+            deadline: parsed.deadline,
+            description: parsed.description,
+          }));
+          setClassDigit('');
+          setClassLetter('');
+        } catch (error) {
+          console.error(error);
+          setNewAssignment(prev => ({ ...prev, title: `Задание из изображения (${file.name})` }));
+        } finally {
+          setIsParsing(false);
+        }
       };
       reader.readAsDataURL(file);
     }
@@ -166,10 +362,12 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
         ...newAssignment,
         title: parsed.title,
         subject: parsed.subject,
-        class: '',
+        classes: [],
         deadline: parsed.deadline,
         description: parsed.description,
       });
+      setClassDigit('');
+      setClassLetter('');
     } catch (error) {
       console.error(error);
       alert('Ошибка при обращении к нейросети');
@@ -182,25 +380,95 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
     setUploadedImage(null);
   };
 
-  const handleAddAssignment = (e: React.FormEvent) => {
+  const closeAddForm = () => {
+    setShowAddForm(false);
+    setAddMode('selection');
+    setVoiceStep('idle');
+    setIsRecording(false);
+    setIsParsing(false);
+    setLiveTranscript('');
+    setUploadedImage(null);
+    speechTranscriptRef.current = '';
+    if (speechRecognitionRef.current) {
+      try { speechRecognitionRef.current.stop(); } catch (_) {}
+      speechRecognitionRef.current = null;
+    }
+  };
+
+  const handleAddAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
-    const assignment: Assignment = {
-      id: Date.now(),
+
+    let finalClasses = [...newAssignment.classes];
+    if (classDigit && classLetter.trim()) {
+      const newClass = `${classDigit}${classLetter.trim()}`;
+      if (!finalClasses.includes(newClass)) {
+        finalClasses.push(newClass);
+      }
+    }
+
+    if (finalClasses.length === 0) {
+      alert("Пожалуйста, укажите и добавьте хотя бы один класс.");
+      return;
+    }
+
+    const tempId = Date.now();
+    const optimisticAssignment: Assignment = {
+      id: tempId,
       title: newAssignment.title,
       subject: newAssignment.subject,
-      class: newAssignment.class,
+      class: finalClasses,
       deadline: newAssignment.deadline,
       studentsCount: 0,
       description: newAssignment.description,
       submissions: []
     };
-    setAssignments([...assignments, assignment]);
-    setNewAssignment({ title: '', subject: '', class: '', deadline: '', description: '' });
+    setAssignments(prev => [optimisticAssignment, ...prev]);
+    setNewAssignment({ title: '', subject: '', classes: [], deadline: '', description: '' });
+    setClassDigit('');
+    setClassLetter('');
     setUploadedImage(null);
     setShowAddForm(false);
+    setAddMode('selection');
+
+    try {
+      const data = await apiRequest('/assignments', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: newAssignment.title,
+          subject: newAssignment.subject,
+          assignedClass: finalClasses,
+          deadline: newAssignment.deadline,
+          description: newAssignment.description,
+          teacherEmail: userEmail,
+          teacherName: userName,
+        }),
+      });
+      // Replace optimistic entry with real one from server
+      setAssignments(prev => prev.map(a => a.id === tempId ? { ...data.assignment, submissions: [] } : a));
+    } catch (err) {
+      console.error('Failed to create assignment:', err);
+      // Remove optimistic entry on failure
+      setAssignments(prev => prev.filter(a => a.id !== tempId));
+      alert('Ошибка при создании задания. Попробуйте снова.');
+    }
   };
 
-  const handleApproveSubmission = (assignmentId: number, submissionId: number) => {
+  const handleDeleteAssignment = async (assignmentId: number) => {
+    if (!window.confirm('Вы уверены, что хотите удалить это задание? Оно пропадет у всех учеников.')) {
+      return;
+    }
+
+    try {
+      await apiRequest(`/assignments/${assignmentId}`, { method: 'DELETE' });
+      setAssignments(prev => prev.filter(a => a.id !== assignmentId));
+    } catch (err) {
+      console.error('Failed to delete assignment:', err);
+      alert('Ошибка при удалении задания.');
+    }
+  };
+
+  const handleApproveSubmission = async (assignmentId: number, submissionId: number) => {
+    // Optimistic update
     setAssignments(prev => prev.map(assignment => {
       if (assignment.id === assignmentId) {
         return {
@@ -214,9 +482,18 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
     }));
     setShowCheckModal(false);
     setSelectedSubmission(null);
+
+    try {
+      await apiRequest(`/submissions/${submissionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'approved' }),
+      });
+    } catch (err) {
+      console.error('Failed to approve submission:', err);
+    }
   };
 
-  const handleRejectSubmission = (assignmentId: number, submissionId: number) => {
+  const handleRejectSubmission = async (assignmentId: number, submissionId: number) => {
     setAssignments(prev => prev.map(assignment => {
       if (assignment.id === assignmentId) {
         return {
@@ -230,6 +507,15 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
     }));
     setShowCheckModal(false);
     setSelectedSubmission(null);
+
+    try {
+      await apiRequest(`/submissions/${submissionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'rejected' }),
+      });
+    } catch (err) {
+      console.error('Failed to reject submission:', err);
+    }
   };
 
   const pendingSubmissionsCount = assignments.reduce((count, assignment) =>
@@ -353,63 +639,139 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                   className="bg-[#141414]/90 backdrop-blur-3xl rounded-2xl md:rounded-3xl p-4 md:p-8 border border-white/10 shadow-2xl w-full max-w-2xl relative overflow-hidden shrink-0 my-auto"
                 >
                   <div className="absolute inset-0 bg-gradient-to-b from-white/5 to-transparent pointer-events-none" />
-                  <h3 className="text-lg md:text-2xl font-medium mb-3 md:mb-6 text-white/90 relative z-10">Новое задание</h3>
+                  <h3 className="text-lg md:text-2xl font-medium mb-3 md:mb-6 text-white/90 relative z-10 text-center">
+                    {addMode === 'selection' ? 'Выберите формат ввода' : addMode === 'voice' ? 'Голосовой ввод' : 'Новое задание'}
+                  </h3>
 
+                  {/* Selection screen */}
+                  {addMode === 'selection' && (
+                    <div className="flex flex-col gap-4 relative z-10">
+                      <button onClick={() => setAddMode('text')} className="flex items-center gap-4 p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-left w-full">
+                        <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center text-primary shrink-0">
+                          <FileText className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <h4 className="text-white font-medium text-lg">Текстовый ввод</h4>
+                          <p className="text-white/50 text-sm">Заполнить форму вручную</p>
+                        </div>
+                      </button>
+
+                      <motion.button
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={() => setAddMode('voice')}
+                        className="flex items-center gap-4 p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-left w-full group relative overflow-hidden"
+                      >
+                        <div className="absolute inset-0 bg-gradient-to-r from-[#10b981]/0 via-[#10b981]/10 to-[#10b981]/0 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        <div className="w-12 h-12 rounded-full bg-[#10b981]/20 flex items-center justify-center text-[#10b981] shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.2)] group-hover:shadow-[0_0_25px_rgba(16,185,129,0.4)] transition-all">
+                          <Mic className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                        </div>
+                        <div className="relative z-10">
+                          <h4 className="text-white font-medium text-lg">Голосовой ввод</h4>
+                          <p className="text-white/50 text-sm group-hover:text-white/70 transition-colors">Продиктовать задание ИИ</p>
+                        </div>
+                      </motion.button>
+
+                      <div className="relative">
+                        <button onClick={() => document.getElementById('teacherImageUploadFormat')?.click()} className="flex items-center gap-4 p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-left w-full">
+                          <div className="w-12 h-12 rounded-full bg-[#f59e0b]/20 flex items-center justify-center text-[#f59e0b] shrink-0">
+                            <ImageIcon className="w-6 h-6" />
+                          </div>
+                          <div>
+                            <h4 className="text-white font-medium text-lg">По фото</h4>
+                            <p className="text-white/50 text-sm">Загрузить фото задания</p>
+                          </div>
+                        </button>
+                        <input type="file" id="teacherImageUploadFormat" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row gap-3 pt-4">
+                        <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="button" onClick={closeAddForm} className="w-full px-6 py-3.5 bg-white/5 text-white/80 font-medium rounded-xl border border-white/10 hover:bg-white/10 transition-all">
+                          Отмена
+                        </motion.button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Voice screen */}
+                  {addMode === 'voice' && (
+                    <div className="flex flex-col items-center relative z-10 gap-5 py-2">
+                      <AnimatePresence mode="wait">
+                        {voiceStep === 'idle' && (
+                          <motion.div key="idle" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="flex flex-col items-center gap-4 text-center">
+                            <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} type="button" onClick={handleVoiceInput} className="w-24 h-24 rounded-full bg-[#10b981]/15 border-2 border-[#10b981]/40 flex items-center justify-center text-[#10b981] shadow-[0_0_30px_rgba(16,185,129,0.2)] hover:shadow-[0_0_50px_rgba(16,185,129,0.4)] hover:bg-[#10b981]/25 hover:border-[#10b981]/70 transition-all">
+                              <Mic className="w-10 h-10" />
+                            </motion.button>
+                            <p className="text-white font-medium">Нажмите для записи</p>
+                          </motion.div>
+                        )}
+                        {voiceStep === 'recording' && (
+                          <motion.div key="recording" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="flex flex-col items-center gap-4 w-full text-center">
+                            <div className="relative">
+                              <motion.div animate={{ scale: [1, 1.2, 1], opacity: [0.4, 0.1, 0.4] }} transition={{ repeat: Infinity, duration: 1.5 }} className="absolute inset-0 rounded-full bg-red-500/30" />
+                              <motion.div animate={{ scale: [1, 1.35, 1], opacity: [0.2, 0.05, 0.2] }} transition={{ repeat: Infinity, duration: 1.5, delay: 0.2 }} className="absolute inset-0 rounded-full bg-red-500/20" />
+                              <div className="w-20 h-20 rounded-full bg-red-500/20 border border-red-500/50 flex items-center justify-center text-red-400 relative z-10">
+                                <Mic className="w-9 h-9" />
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 text-sm text-red-400 font-medium">
+                              <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse shrink-0" />
+                              Запись идёт
+                            </div>
+                            <div className="w-full min-h-[70px] max-h-[130px] overflow-y-auto px-4 py-3 bg-black/40 rounded-xl border border-white/10 text-left">
+                              {liveTranscript
+                                ? <p className="text-white/90 text-sm leading-relaxed">{liveTranscript}<span className="inline-block w-1 h-4 bg-primary ml-0.5 animate-pulse align-middle rounded-sm" /></p>
+                                : <p className="text-white/25 text-sm italic">Говорите — слова появятся здесь в реальном времени...</p>
+                              }
+                            </div>
+                            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} type="button" onClick={() => { if (stopRecordingRef.current) stopRecordingRef.current(); }} className="flex items-center gap-2 px-5 py-2.5 bg-red-500/15 hover:bg-red-500/25 text-red-400 hover:text-red-300 border border-red-500/30 hover:border-red-500/50 rounded-xl transition-all text-sm font-medium">
+                              <span className="w-2.5 h-2.5 rounded-sm bg-red-400" />
+                              Остановить запись
+                            </motion.button>
+                          </motion.div>
+                        )}
+                        {voiceStep === 'processing' && (
+                          <motion.div key="processing" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="flex flex-col items-center gap-4 text-center">
+                            <div className="w-20 h-20 rounded-full bg-primary/15 border border-primary/30 flex items-center justify-center shadow-[0_0_30px_rgba(139,92,246,0.3)]">
+                              <Loader2 className="w-9 h-9 text-primary animate-spin" />
+                            </div>
+                            <p className="text-white font-medium">ИИ анализирует текст</p>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                      <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="button" onClick={() => { setAddMode('selection'); setVoiceStep('idle'); setLiveTranscript(''); setIsRecording(false); }} className="w-full px-6 py-3 bg-white/5 text-white/80 font-medium rounded-xl border border-white/10 hover:bg-white/10 transition-all mt-2">
+                        ← Назад
+                      </motion.button>
+                    </div>
+                  )}
+
+                  {/* Text form */}
+                  {addMode === 'text' && (
+                  <>
                   <form onSubmit={handleAddAssignment} className="space-y-3 md:space-y-5 relative z-10">
                     <div className="space-y-2">
                       <label className="text-xs font-semibold text-white/90 ml-1">Название задания</label>
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={newAssignment.title}
-                          onChange={(e) => setNewAssignment({ ...newAssignment, title: e.target.value })}
-                          placeholder="Например: Квадратные уравнения"
-                          required
-                          className="flex-1 min-w-0 px-3 md:px-4 py-3 md:py-3.5 bg-black/50 text-white font-normal text-[15px] rounded-xl border border-white/20 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-white/50"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleVoiceInput}
-                          disabled={isRecording || isParsing}
-                          className={`p-3 md:py-3.5 md:px-4 rounded-xl border transition-all ${
-                            isRecording
-                              ? 'bg-red-500/20 border-red-500/50 text-red-400 animate-pulse'
-                              : 'bg-primary/10 border-primary/30 text-primary hover:bg-primary/20'
-                          } disabled:opacity-50`}
-                        >
-                          <Mic className="w-5 h-5" />
-                        </button>
-                        <label className="p-3 md:py-3.5 md:px-4 bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 rounded-xl transition-all cursor-pointer">
-                          <ImageIcon className="w-5 h-5" />
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={handleImageUpload}
-                            className="hidden"
-                          />
-                        </label>
-                      </div>
+                      <input
+                        type="text"
+                        value={newAssignment.title}
+                        onChange={(e) => setNewAssignment({ ...newAssignment, title: e.target.value })}
+                        placeholder="Например: Квадратные уравнения"
+                        required
+                        className="w-full min-w-0 px-3 md:px-4 py-3 md:py-3.5 bg-black/50 text-white font-normal text-[15px] rounded-xl border border-white/20 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-white/50"
+                      />
                     </div>
 
                     {uploadedImage && (
                       <div className="relative">
                         <img src={uploadedImage} alt="Загруженное изображение" className="w-full max-h-48 object-contain rounded-xl border border-white/10" />
-                        <button
-                          type="button"
-                          onClick={removeImage}
-                          className="absolute top-2 right-2 p-1.5 bg-black/80 hover:bg-black rounded-full transition-colors"
-                        >
+                        <button type="button" onClick={removeImage} className="absolute top-2 right-2 p-1.5 bg-black/80 hover:bg-black rounded-full transition-colors">
                           <X className="w-4 h-4 text-white" />
                         </button>
                       </div>
                     )}
 
                     {(newAssignment.title || uploadedImage) && !isParsing && (
-                      <button
-                        type="button"
-                        onClick={handleParseAI}
-                        className="w-full py-3 bg-gradient-to-r from-primary/20 to-purple-600/20 text-primary hover:from-primary/30 hover:to-purple-600/30 font-medium rounded-xl border border-primary/30 transition-all flex items-center justify-center gap-2"
-                      >
+                      <button type="button" onClick={handleParseAI} className="w-full py-3 bg-gradient-to-r from-primary/20 to-purple-600/20 text-primary hover:from-primary/30 hover:to-purple-600/30 font-medium rounded-xl border border-primary/30 transition-all flex items-center justify-center gap-2">
                         <Sparkles className="w-4 h-4" />
                         Распознать с помощью AI
                       </button>
@@ -436,15 +798,74 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                       </div>
 
                       <div className="space-y-2">
-                        <label className="text-xs font-semibold text-white/90 ml-1">Класс</label>
-                        <input
-                          type="text"
-                          value={newAssignment.class}
-                          onChange={(e) => setNewAssignment({ ...newAssignment, class: e.target.value })}
-                          placeholder="8А"
-                          required
-                          className="w-full min-w-0 px-2.5 md:px-4 py-2 md:py-3 bg-black/50 text-white font-normal text-[15px] rounded-xl border border-white/20 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-white/50"
-                        />
+                        <label className="text-xs font-semibold text-white/90 ml-1">Классы</label>
+                        <div className="flex gap-2">
+                          <select
+                            value={classDigit}
+                            onChange={(e) => setClassDigit(e.target.value)}
+                            className={`w-1/3 min-w-0 px-2.5 md:px-4 py-2 md:py-3 bg-black/50 text-white font-normal text-[15px] rounded-xl border border-white/20 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50 transition-all [color-scheme:dark] ${!classDigit ? 'text-white/50' : 'text-white'}`}
+                          >
+                            <option value="" disabled>Цифра</option>
+                            {Array.from({ length: 11 }, (_, i) => i + 1).map(grade => (
+                                <option key={grade} value={grade.toString()}>
+                                  {grade}
+                                </option>
+                            ))}
+                          </select>
+                          <input
+                            type="text"
+                            value={classLetter}
+                            onChange={(e) => setClassLetter(e.target.value.toUpperCase())}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                if (classDigit && classLetter.trim()) {
+                                  const newClass = `${classDigit}${classLetter.trim()}`;
+                                  if (!newAssignment.classes.includes(newClass)) {
+                                    setNewAssignment({ ...newAssignment, classes: [...newAssignment.classes, newClass] });
+                                  }
+                                  setClassDigit('');
+                                  setClassLetter('');
+                                }
+                              }
+                            }}
+                            placeholder="Буква"
+                            maxLength={2}
+                            className="w-1/3 min-w-0 px-2.5 md:px-4 py-2 md:py-3 bg-black/50 text-white font-normal text-[15px] rounded-xl border border-white/20 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-white/50"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (classDigit && classLetter.trim()) {
+                                const newClass = `${classDigit}${classLetter.trim()}`;
+                                if (!newAssignment.classes.includes(newClass)) {
+                                  setNewAssignment({ ...newAssignment, classes: [...newAssignment.classes, newClass] });
+                                }
+                                setClassDigit('');
+                                setClassLetter('');
+                              }
+                            }}
+                            className="w-1/3 px-2 py-2 md:py-3 bg-primary/20 hover:bg-primary/30 text-primary font-medium text-[15px] rounded-xl border border-primary/50 transition-all flex items-center justify-center gap-1"
+                          >
+                            <Plus className="w-4 h-4" /> Добавить
+                          </button>
+                        </div>
+                        {newAssignment.classes.length > 0 && (
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {newAssignment.classes.map(c => (
+                              <span key={c} className="inline-flex items-center gap-1.5 bg-white/10 border border-white/20 px-3 py-1.5 rounded-lg text-sm text-white">
+                                {c}
+                                <button
+                                  type="button"
+                                  onClick={() => setNewAssignment({ ...newAssignment, classes: newAssignment.classes.filter(cls => cls !== c) })}
+                                  className="text-white/50 hover:text-white/90 transition-colors"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -475,13 +896,10 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                         whileHover={{ scale: 1.02 }}
                         whileTap={{ scale: 0.98 }}
                         type="button"
-                        onClick={() => {
-                          setShowAddForm(false);
-                          setUploadedImage(null);
-                        }}
+                        onClick={() => setAddMode('selection')}
                         className="w-full sm:w-auto px-6 py-3.5 bg-white/5 text-white/80 font-medium rounded-xl border border-white/10 hover:bg-white/10 transition-all"
                       >
-                        Отмена
+                        ← Назад
                       </motion.button>
                       <motion.button
                         whileHover={{ scale: 1.02 }}
@@ -493,6 +911,8 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                       </motion.button>
                     </div>
                   </form>
+                  </>
+                  )}
                 </motion.div>
               </div>
             </motion.div>
@@ -540,6 +960,51 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                         <p className="text-white/50">Преподаватель</p>
                       </div>
                       <p className="text-white/60">Всего заданий: {assignments.length}</p>
+
+                      <div className="mt-4 border-t border-white/10 pt-4">
+                        <h3 className="text-lg font-medium text-white/90 mb-3">Мои предметы</h3>
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {subjects.map((sub, idx) => (
+                            <span key={idx} className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary border border-primary/20 rounded-xl text-sm">
+                              {sub}
+                              <button onClick={() => setSubjects(subjects.filter(s => s !== sub))} className="hover:text-red-400 transition-colors ml-1">
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </span>
+                          ))}
+                          {subjects.length === 0 && <p className="text-white/40 text-sm">Предметы не добавлены</p>}
+                        </div>
+                        <div className="flex gap-2">
+                          <input 
+                            id="newSubjectInput"
+                            type="text" 
+                            placeholder="Добавить предмет..." 
+                            className="bg-black/50 border border-white/10 rounded-xl px-4 py-2 text-sm text-white flex-1 focus:outline-none focus:border-primary/50"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const val = e.currentTarget.value.trim();
+                                if (val && !subjects.includes(val)) {
+                                  setSubjects([...subjects, val]);
+                                  e.currentTarget.value = '';
+                                }
+                              }
+                            }}
+                          />
+                          <button 
+                            onClick={() => {
+                              const input = document.getElementById('newSubjectInput') as HTMLInputElement;
+                              const val = input.value.trim();
+                              if (val && !subjects.includes(val)) {
+                                setSubjects([...subjects, val]);
+                                input.value = '';
+                              }
+                            }}
+                            className="px-4 py-2 bg-primary/20 text-primary rounded-xl text-sm font-medium hover:bg-primary/30 transition-colors shrink-0"
+                          >
+                            Добавить
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -587,6 +1052,17 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                     </button>
                   </div>
 
+                  {onLogout && (
+                    <button
+                      onClick={() => {
+                        setShowSettingsModal(false);
+                        onLogout();
+                      }}
+                      className="w-full py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 font-medium rounded-xl border border-red-500/30 transition-all"
+                    >
+                      Выйти из аккаунта
+                    </button>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -626,10 +1102,10 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                     </button>
                   </div>
 
-                  {selectedSubmission.submission.screenshot && (
+                  {selectedSubmission.submission.screenshotUrl && (
                     <div className="mb-6 rounded-2xl overflow-hidden border border-white/10 bg-black/30">
                       <img
-                        src={selectedSubmission.submission.screenshot}
+                        src={selectedSubmission.submission.screenshotUrl}
                         alt="Работа ученика"
                         className="w-full h-auto"
                       />
@@ -676,9 +1152,19 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
         </AnimatePresence>
 
             {activeTab === 'assignments' ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
                 <AnimatePresence mode="popLayout">
-                  {assignments.length > 0 ? (
+                  {isLoading ? (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="col-span-full flex justify-center items-center py-20"
+                    >
+                      <Loader2 className="w-8 h-8 text-primary animate-spin" />
+                      <span className="ml-3 text-white/50">Загрузка заданий...</span>
+                    </motion.div>
+                  ) : assignments.length > 0 ? (
                     assignments.map((assignment, idx) => (
                       <motion.div
                         key={assignment.id}
@@ -693,22 +1179,29 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                         <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/5 group-hover:ring-primary/20 pointer-events-none transition-all duration-500" />
 
                         <div className="relative z-10 space-y-4">
-                          <div className="flex justify-between items-start">
-                            <div>
+                          <div className="flex justify-between items-start relative">
+                            <div className="pr-12">
                               <h3 className="text-lg font-medium text-white/90 group-hover:text-primary transition-colors leading-snug">
                                 {assignment.title}
                               </h3>
                               <p className="text-white/50 text-sm mt-1 font-medium">{assignment.subject}</p>
                             </div>
-                            <div className="p-2 bg-white/5 rounded-lg border border-white/10 text-primary">
+                            <div className="flex items-center justify-center w-10 h-10 bg-white/5 rounded-lg border border-white/10 text-primary group-hover:opacity-0 transition-opacity absolute top-0 right-0">
                               <FileText className="w-5 h-5 opacity-80" />
                             </div>
+                            <button 
+                              onClick={() => handleDeleteAssignment(assignment.id)}
+                              className="flex items-center justify-center w-10 h-10 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg border border-red-500/30 transition-all opacity-0 group-hover:opacity-100 absolute top-0 right-0 z-20"
+                              title="Удалить задание"
+                            >
+                              <Trash2 className="w-5 h-5" />
+                            </button>
                           </div>
 
                           <div className="flex items-center gap-4 pt-2">
                             <span className="px-3 py-1.5 bg-white/5 rounded-lg text-xs font-medium text-white/80 border border-white/10 flex items-center gap-1.5">
                               <Users className="w-3.5 h-3.5 opacity-60" />
-                              {assignment.class}
+                              {Array.isArray(assignment.class) ? assignment.class.join(', ') : assignment.class}
                             </span>
                             <span className="px-3 py-1.5 bg-white/5 rounded-lg text-xs font-medium text-white/80 border border-white/10 flex items-center gap-1.5">
                               <Calendar className="w-3.5 h-3.5 opacity-60" />
@@ -746,6 +1239,7 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                     </motion.div>
                   )}
                 </AnimatePresence>
+                </div>
               </div>
             ) : (
               <div className="space-y-4">
@@ -771,7 +1265,7 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                               <div className="flex-1 space-y-4">
                                 <div>
                                   <h3 className="text-lg font-medium text-white/90 mb-1">{assignment.title}</h3>
-                                  <p className="text-white/50 text-sm">{assignment.subject} • {assignment.class}</p>
+                                  <p className="text-white/50 text-sm">{assignment.subject} • {Array.isArray(assignment.class) ? assignment.class.join(', ') : assignment.class}</p>
                                 </div>
 
                                 <div className="flex items-center gap-3">
@@ -794,7 +1288,7 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                               </div>
 
                               <div className="flex flex-col gap-3 items-end justify-between">
-                                {submission.screenshot && (
+                                {submission.screenshotUrl && (
                                   <button
                                     onClick={() => {
                                       setSelectedSubmission({ assignment, submission });
@@ -829,18 +1323,13 @@ export function TeacherDashboard({ userName, isLightGradient, setIsLightGradient
                         ))
                     )
                   ): (
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className="text-center py-20 px-6 rounded-3xl border border-white/5 bg-white/[0.02] backdrop-blur-md"
-                    >
-                      <div className="w-16 h-16 mx-auto bg-white/5 rounded-full flex items-center justify-center mb-4">
-                        <CheckCircle className="w-8 h-8 text-white/20" />
-                      </div>
-                      <p className="text-white/50 text-lg mb-4">
-                        Нет работ на проверке
-                      </p>
-                    </motion.div>
+                    <TeacherSubmissionsView
+                      assignments={assignments}
+                      onViewSubmission={(assignment, submission) => {
+                        setSelectedSubmission({ assignment, submission });
+                        setShowCheckModal(true);
+                      }}
+                    />
                   )}
                 </AnimatePresence>
               </div>

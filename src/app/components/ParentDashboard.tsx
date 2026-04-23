@@ -3,9 +3,10 @@ import { motion } from 'motion/react';
 
 interface ParentDashboardProps {
   userName: string;
+  onLogout?: () => void;
 }
 
-export function ParentDashboard({ userName }: ParentDashboardProps) {
+export function ParentDashboard({ userName, onLogout }: ParentDashboardProps) {
   const todayCompleted: Array<{ subject: string; task: string; time: string }> = [];
 
   const todayRemaining: Array<{ subject: string; task: string; deadline: string; priority: boolean }> = [];
@@ -42,6 +43,14 @@ export function ParentDashboard({ userName }: ParentDashboardProps) {
           <p className="text-lg text-white/50 max-w-2xl mx-auto font-light">
             Дашборд успеваемости вашего ребёнка
           </p>
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              className="mt-4 px-6 py-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 font-medium rounded-xl border border-red-500/30 transition-all"
+            >
+              Выйти из аккаунта
+            </button>
+          )}
         </motion.header>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">

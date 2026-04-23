@@ -1,4 +1,4 @@
-export const OPENROUTER_API_KEY = "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";
+export const OPENROUTER_API_KEY = "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";
 
 export interface ParsedTask {
   title: string;
@@ -8,6 +8,93 @@ export interface ParsedTask {
   duration: string;
   description: string;
   isPriority: boolean;
+}
+
+async function callOpenRouter(input: string, imageUrl?: string | null): Promise<ParsedTask | null> {
+  // Skip API call if no real key is provided
+  if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === "YOUR_OPENROUTER_API_KEY_HERE") {
+    return null;
+  }
+
+  try {
+    const messages: any[] = [];
+    
+    const systemPrompt = `Проанализируй это задание и верни ТОЛЬКО валидный JSON (без разметки markdown \`\`\`json).
+Текст/Контекст: "${input}"
+Текущая дата: ${new Date().toLocaleDateString('ru-RU')} (используй для расчета сроков)
+
+Формат ответа JSON:
+{
+  "title": "краткое и понятное название задачи",
+  "subject": "название предмета с заглавной буквы",
+  "difficulty": "Легко|Средне|Сложно",
+  "deadline": "YYYY-MM-DD",
+  "duration": "примерное время на выполнение (например, '30 мин', '1 час')",
+  "description": "подробное описание задачи. Обязательно разбей выполнение на логические шаги (подзадачи) маркированным списком (- шаг 1\\n- шаг 2).",
+  "isPriority": false
+}`;
+
+    if (imageUrl) {
+      messages.push({
+        role: "user",
+        content: [
+          { type: "text", text: systemPrompt },
+          { type: "image_url", image_url: { url: imageUrl } }
+        ]
+      });
+    } else {
+      messages.push({
+        role: "user",
+        content: systemPrompt
+      });
+    }
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": window.location.origin,
+        "X-Title": "RezoFlow"
+      },
+      body: JSON.stringify({
+        model: "openai/gpt-4o-mini",
+        messages: messages,
+        response_format: { type: "json_object" }
+      })
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => ({}));
+      console.error("OpenRouter request failed", response.status, errorBody);
+      if (response.status === 401) {
+        console.warn("401 details:", errorBody);
+      }
+      return null;
+    }
+
+    const data = await response.json();
+    if (data.choices && data.choices.length > 0) {
+      const resultText = data.choices[0].message.content;
+      const jsonMatch = resultText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          title: parsed.title || input.substring(0, 50),
+          subject: parsed.subject || 'Разное',
+          difficulty: parsed.difficulty || 'Средне',
+          deadline: parsed.deadline || new Date(Date.now() + 86400000).toISOString().split('T')[0],
+          duration: parsed.duration || '30 мин',
+          description: parsed.description || input,
+          isPriority: parsed.isPriority || false
+        } as ParsedTask;
+      }
+    }
+  } catch (error) {
+    console.error("Error calling OpenRouter:", error);
+  }
+  
+  return null;
 }
 
 async function tryBrowserAI(input: string): Promise<ParsedTask | null> {
@@ -29,7 +116,7 @@ async function tryBrowserAI(input: string): Promise<ParsedTask | null> {
   "difficulty": "Легко|Средне|Сложно",
   "deadline": "YYYY-MM-DD",
   "duration": "время на выполнение",
-  "description": "полное описание",
+  "description": "подробное описание задания. Обязательно разбей его на логические шаги (подзадачи) в виде маркированного списка с дефисами (- шаг 1\\n- шаг 2), чтобы было понятно, как именно его выполнять.",
   "isPriority": false
 }`;
 
@@ -57,11 +144,19 @@ async function tryBrowserAI(input: string): Promise<ParsedTask | null> {
 }
 
 export async function parseTaskWithAI(input: string, imageUrl?: string | null): Promise<ParsedTask> {
-  // Пробуем использовать встроенный AI браузера
-  const browserResult = await tryBrowserAI(input);
-  if (browserResult) return browserResult;
+  // Пытаемся использовать полноценную Vision-модель через OpenRouter
+  // Если есть картинка, или если мы просто хотим получить лучший результат для текста
+  const orResult = await callOpenRouter(input, imageUrl);
+  if (orResult) return orResult;
 
-  // Имитация задержки обработки
+  // Резервные варианты (Fallback):
+  // Пробуем использовать встроенный AI браузера
+  if (!imageUrl) {
+    const browserResult = await tryBrowserAI(input);
+    if (browserResult) return browserResult;
+  }
+
+  // Имитация задержки обработки для локального парсинга
   await new Promise(resolve => setTimeout(resolve, 1000));
 
   // Улучшенный парсинг на основе ключевых слов и контекста
@@ -201,4 +296,77 @@ export async function parseTaskWithAI(input: string, imageUrl?: string | null): 
     description,
     isPriority
   };
+}
+
+export async function transcribeAudio(audioBlob: Blob): Promise<string> {
+  if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === "YOUR_OPENROUTER_API_KEY_HERE") {
+    throw new Error('API key not set');
+  }
+  const ext = audioBlob.type.includes('ogg') ? 'audio.ogg' : audioBlob.type.includes('mp4') ? 'audio.mp4' : 'audio.webm';
+  const formData = new FormData();
+  formData.append('file', audioBlob, ext);
+  formData.append('model', 'openai/whisper-large-v3');
+
+  const response = await fetch('https://openrouter.ai/api/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'HTTP-Referer': window.location.origin,
+      'X-Title': 'RezoFlow',
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    console.error('Whisper transcription failed', response.status, err);
+    throw new Error('Transcription failed');
+  }
+
+  const data = await response.json();
+  return (data.text || '').trim();
+}
+
+export type ChatMessage = {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+};
+
+export async function chatWithAI(messages: ChatMessage[]): Promise<string> {
+  if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === "YOUR_OPENROUTER_API_KEY_HERE") {
+    throw new Error('API key not set');
+  }
+
+  // Prepend system instruction for the AI persona
+  const systemPrompt: ChatMessage = {
+    role: 'system',
+    content: `Ты — ИИ-помощник RezoFlow для учеников. Твоя задача — помогать анализировать и составлять оптимальное расписание, а также давать подсказки по сложным заданиям. Строго запрещено решать задания за пользователя — только давай подсказки, наводящие вопросы и объясняй концепции. Будь дружелюбным, поддерживающим и используй понятный язык.`
+  };
+
+  const payloadMessages = [systemPrompt, ...messages];
+
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": window.location.origin,
+      "X-Title": "RezoFlow Chat"
+    },
+    body: JSON.stringify({
+      model: "openai/gpt-4o-mini",
+      messages: payloadMessages,
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error('Chat API request failed');
+  }
+
+  const data = await response.json();
+  if (data.choices && data.choices.length > 0) {
+    return data.choices[0].message.content;
+  }
+  
+  return "Извините, не удалось получить ответ. Попробуйте еще раз.";
 }
