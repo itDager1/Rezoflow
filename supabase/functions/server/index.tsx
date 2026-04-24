@@ -51,7 +51,6 @@ const generateSalt = (): string => {
     .join("");
 };
 
-// salt="" preserves backwards-compat with legacy unsalted accounts
 const hashPassword = async (
   password: string,
   salt: string = ""
@@ -97,7 +96,9 @@ app.use(
 );
 
 // ─── HEALTH ───────────────────────────────────────────────────────────────────
-app.get("/make-server-ca4c8ee9/health", (c) => c.json({ status: "ok", timestamp: Date.now() }));
+app.get("/make-server-ca4c8ee9/health", (c) =>
+  c.json({ status: "ok", timestamp: Date.now() })
+);
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -164,7 +165,6 @@ app.post("/make-server-ca4c8ee9/auth/login", async (c) => {
       return c.json({ error: "Пользователь не найден" }, 401);
     }
 
-    // Support both salted (new) and legacy unsalted accounts
     let isPasswordValid = false;
 
     if (!user.passwordHash && password === "") {
@@ -275,7 +275,13 @@ app.get("/make-server-ca4c8ee9/assignments/class", async (c) => {
     if (!className) return c.json({ error: "Укажите класс" }, 400);
 
     const all = (await kv.getByPrefix("assignment:")) as any[];
-    const filtered = all.filter((a) => a && (Array.isArray(a.class) ? a.class.includes(className) : a.class === className));
+    const filtered = all.filter(
+      (a) =>
+        a &&
+        (Array.isArray(a.class)
+          ? a.class.includes(className)
+          : a.class === className)
+    );
     return c.json(filtered.sort((a, b) => b.createdAt - a.createdAt));
   } catch (err) {
     console.log("Get class assignments error:", err);
@@ -329,9 +335,7 @@ app.delete("/make-server-ca4c8ee9/assignments/:id", async (c) => {
     // Cascade: delete orphaned submissions
     const allSubs = (await kv.getByPrefix("submission:")) as any[];
     const numericId = parseInt(id);
-    const toDelete = allSubs.filter(
-      (s) => s && s.assignmentId === numericId
-    );
+    const toDelete = allSubs.filter((s) => s && s.assignmentId === numericId);
     await Promise.all(toDelete.map((s) => kv.del(`submission:${s.id}`)));
 
     return c.json({ success: true });
@@ -384,7 +388,6 @@ app.post("/make-server-ca4c8ee9/assignments/:id/submit", async (c) => {
           .upload(fileName, bytes, { contentType: "image/png" });
 
         if (!uploadError) {
-          // 10-year signed URL to avoid near-term expiry
           const { data: urlData } = await supabase.storage
             .from(BUCKET_NAME)
             .createSignedUrl(fileName, 10 * 365 * 24 * 60 * 60);
@@ -430,7 +433,6 @@ app.patch("/make-server-ca4c8ee9/submissions/:id", async (c) => {
     const submission = (await kv.get(`submission:${subId}`)) as any;
     if (!submission) return c.json({ error: "Работа не найдена" }, 404);
 
-    // Verify the teacher owns the assignment this submission belongs to
     const assignment = (await kv.get(
       `assignment:${submission.assignmentId}`
     )) as any;

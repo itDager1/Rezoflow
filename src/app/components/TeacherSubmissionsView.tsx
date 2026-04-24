@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, forwardRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Users, CheckCircle, XCircle, Clock, BookOpen, ChevronLeft, Eye, User } from 'lucide-react';
 
@@ -27,7 +27,8 @@ interface TeacherSubmissionsViewProps {
   onViewSubmission?: (assignment: Assignment, submission: Submission) => void;
 }
 
-export function TeacherSubmissionsView({ assignments, onViewSubmission }: TeacherSubmissionsViewProps) {
+export const TeacherSubmissionsView = forwardRef<HTMLDivElement, TeacherSubmissionsViewProps>(
+  function TeacherSubmissionsView({ assignments, onViewSubmission }, ref) {
   const [selectedClass, setSelectedClass] = useState<string | null>(null);
 
   // Collect all unique classes
@@ -73,6 +74,7 @@ export function TeacherSubmissionsView({ assignments, onViewSubmission }: Teache
 
   return (
     <motion.div
+      ref={ref}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       className="space-y-6"
@@ -160,7 +162,7 @@ export function TeacherSubmissionsView({ assignments, onViewSubmission }: Teache
         /* Submissions list for selected class */
         <AnimatePresence mode="popLayout">
           {filteredSubmissions.length > 0 ? (
-            <div className="space-y-3">
+            <div key="list" className="space-y-3">
               {filteredSubmissions.map(({ assignment, submission }, i) => (
                 <motion.div
                   key={`${assignment.id}-${submission.id}`}
@@ -226,6 +228,7 @@ export function TeacherSubmissionsView({ assignments, onViewSubmission }: Teache
             </div>
           ) : (
             <motion.div
+              key="empty"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               className="text-center py-14 px-6 rounded-2xl border border-white/5 bg-white/[0.02]"
@@ -240,4 +243,4 @@ export function TeacherSubmissionsView({ assignments, onViewSubmission }: Teache
       )}
     </motion.div>
   );
-}
+});

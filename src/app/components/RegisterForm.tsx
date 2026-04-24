@@ -20,6 +20,7 @@ export function RegisterForm({ onRegister }: RegisterFormProps) {
   const [selectedLetter, setSelectedLetter] = useState<string>('А');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isEmailConfirmInfo, setIsEmailConfirmInfo] = useState(false);
 
   const roles = [
     { id: 'student' as UserRole, label: 'Школьник', icon: <GraduationCap className="w-8 h-8" />, description: 'Я учусь' },
@@ -41,7 +42,8 @@ export function RegisterForm({ onRegister }: RegisterFormProps) {
         });
         onRegister(data.user.name, data.user.email, data.user.role, data.user.studentClass || undefined, data.token);
       } catch (err: any) {
-        setError(err.message || 'Ошибка входа');
+        const msg = err.message || 'Ошибка входа';
+        setError(msg);
       } finally {
         setIsLoading(false);
       }
@@ -57,6 +59,10 @@ export function RegisterForm({ onRegister }: RegisterFormProps) {
       setError('Пароли не совпадают');
       return;
     }
+    if (password.length < 6) {
+      setError('Пароль должен содержать не менее 6 символов');
+      return;
+    }
 
     const studentClass =
       selectedRole === 'student' ? `${selectedGrade}${selectedLetter}` : undefined;
@@ -69,7 +75,14 @@ export function RegisterForm({ onRegister }: RegisterFormProps) {
       });
       onRegister(data.user.name, data.user.email, data.user.role, data.user.studentClass || undefined, data.token);
     } catch (err: any) {
-      setError(err.message || 'Ошибка регистрации');
+      const msg = err.message || 'Ошибка регистрации';
+      // If email confirmation required — show friendly hint
+      if (msg.toLowerCase().includes('подтверждения') || msg.toLowerCase().includes('confirmation')) {
+        setError(msg);
+        setIsEmailConfirmInfo(true);
+      } else {
+        setError(msg);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -297,15 +310,22 @@ export function RegisterForm({ onRegister }: RegisterFormProps) {
               </AnimatePresence>
             </div>
 
-            {/* Error */}
+            {/* Error / Info */}
             <AnimatePresence>
               {error && (
                 <motion.div
                   initial={{ opacity: 0, y: -8 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -8 }}
-                  className="px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm"
+                  className={`px-4 py-3 rounded-xl text-sm leading-relaxed ${
+                    isEmailConfirmInfo
+                      ? 'bg-blue-500/10 border border-blue-500/30 text-blue-300'
+                      : 'bg-red-500/10 border border-red-500/30 text-red-400'
+                  }`}
                 >
+                  {isEmailConfirmInfo && (
+                    <p className="font-semibold mb-1">📧 Подтвердите email</p>
+                  )}
                   {error}
                 </motion.div>
               )}

@@ -1,19 +1,19 @@
 // v2
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Calendar, Users, FileText, User, Settings, X, Camera, CheckCircle, XCircle, Eye, Mic, Image as ImageIcon, Loader2, Sparkles, Trash2 } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Plus, Calendar, Users, FileText, User, Settings, X, Camera, CheckCircle, XCircle, Eye, Mic, Image as ImageIcon, Loader2, Sparkles, Trash2, Trophy, Bell, GraduationCap } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { parseTaskWithAI, transcribeAudio } from '../utils/ai';
 import { apiRequest } from '../utils/api';
 import { ClassAssignmentInfo } from './ClassAssignmentInfo';
 import { TeacherSubmissionsView } from './TeacherSubmissionsView';
+import { Leaderboard } from './Leaderboard';
+import { ClassStudentsModal } from './ClassStudentsList';
 
 interface TeacherDashboardProps {
   userName: string;
   userEmail: string;
   isLightGradient: boolean;
   setIsLightGradient: (value: boolean) => void;
-  isSnowEnabled: boolean;
-  setIsSnowEnabled: (value: boolean) => void;
   onLogout?: () => void;
 }
 
@@ -37,7 +37,7 @@ interface Assignment {
   submissions: Submission[];
 }
 
-export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLightGradient, isSnowEnabled, setIsSnowEnabled, onLogout }: TeacherDashboardProps) {
+export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLightGradient, onLogout }: TeacherDashboardProps) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -64,6 +64,8 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showCheckModal, setShowCheckModal] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [showStudentsList, setShowStudentsList] = useState(false);
   const [selectedSubmission, setSelectedSubmission] = useState<{assignment: Assignment, submission: Submission} | null>(null);
   const [avatar, setAvatar] = useState<string | null>(() => {
     try { return localStorage.getItem('rezoflow_teacher_avatar'); } catch { return null; }
@@ -77,6 +79,53 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
     }
   });
   const [activeTab, setActiveTab] = useState<'assignments' | 'check'>('assignments');
+
+  // ── Notifications ──────────────────────────────────────────────
+  const [showNotifPanel, setShowNotifPanel] = useState(false);
+  const [seenSubmissionIds, setSeenSubmissionIds] = useState<Set<number>>(() => {
+    try {
+      const raw = localStorage.getItem(`rezoflow_teacher_seen_subs_${userEmail}`);
+      return raw ? new Set<number>(JSON.parse(raw)) : new Set<number>();
+    } catch { return new Set<number>(); }
+  });
+  const notifPanelRef = useRef<HTMLDivElement>(null);
+
+  // Persist seen IDs
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        `rezoflow_teacher_seen_subs_${userEmail}`,
+        JSON.stringify(Array.from(seenSubmissionIds))
+      );
+    } catch {}
+  }, [seenSubmissionIds, userEmail]);
+
+  // Collect all pending submissions not yet seen
+  const newSubmissions = assignments.flatMap(a =>
+    a.submissions
+      .filter(s => s.status === 'pending' && !seenSubmissionIds.has(s.id))
+      .map(s => ({ submission: s, assignment: a }))
+  );
+
+  const markAllSeen = () => {
+    const allPendingIds = assignments.flatMap(a =>
+      a.submissions.filter(s => s.status === 'pending').map(s => s.id)
+    );
+    setSeenSubmissionIds(prev => new Set([...prev, ...allPendingIds]));
+  };
+
+  // Close panel on outside click
+  useEffect(() => {
+    if (!showNotifPanel) return;
+    const handler = (e: MouseEvent) => {
+      if (notifPanelRef.current && !notifPanelRef.current.contains(e.target as Node)) {
+        setShowNotifPanel(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showNotifPanel]);
+  // ───────────────────────────────────────────────────────────────
 
   const [isRecording, setIsRecording] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
@@ -113,49 +162,7 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
     } catch {}
   }, [subjects, userEmail]);
 
-  useEffect(() => {
-    const doCleanup = async () => {
-      const cleanupKey = 'rezoflow_cleanup_cmd_teacher_5';
-      const hasCleaned = localStorage.getItem(cleanupKey);
-      if (!hasCleaned && !isLoading) {
-        console.log('Running requested system cleanup (Teacher)...');
-        
-        // 1. Delete all assignments from the API if they exist
-        if (assignments.length > 0) {
-          try {
-            await Promise.all(assignments.map(a => 
-              apiRequest(`/assignments/${a.id}`, { method: 'DELETE' })
-            ));
-          } catch (e) {
-            console.error('Failed to delete some assignments:', e);
-          }
-        }
-        
-        // 2. Clear all local storage records for students (tasks, xp, completed)
-        const keysToRemove = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (key && (
-            key.startsWith('rezoflow_student_tasks_') ||
-            key.startsWith('rezoflow_student_completed_') ||
-            key.startsWith('rezoflow_student_xp_') ||
-            key.startsWith('rezoflow_student_notifications_') ||
-            key.startsWith('rezoflow_ai_chat')
-          )) {
-            keysToRemove.push(key);
-          }
-        }
-        keysToRemove.forEach(k => localStorage.removeItem(k));
-        
-        localStorage.setItem(cleanupKey, 'true');
-        
-        // Refresh to get empty state
-        window.location.reload();
-      }
-    };
-    
-    doCleanup();
-  }, [assignments, isLoading]);
+
 
   const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -463,7 +470,7 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
       setAssignments(prev => prev.filter(a => a.id !== assignmentId));
     } catch (err) {
       console.error('Failed to delete assignment:', err);
-      alert('Ошибка при удалении задания.');
+      alert('Ошибка пр�� удалении задания.');
     }
   };
 
@@ -532,16 +539,151 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
         <motion.header
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="flex items-center justify-between gap-4 px-3 md:px-6 py-3 md:py-4"
+          className="flex items-center justify-between px-3 md:px-6 py-3 md:py-4"
         >
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => setShowSettingsModal(true)}
-            className="p-2 md:p-2.5 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 transition-all text-white/60 hover:text-white"
-          >
-            <Settings className="w-4 h-4 md:w-5 md:h-5" />
-          </motion.button>
+          {/* ── Left group: Settings + Bell + Trophy ── */}
+          <div className="flex items-center gap-2">
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => setShowSettingsModal(true)}
+              className="p-2 md:p-2.5 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 transition-all text-white/60 hover:text-white"
+            >
+              <Settings className="w-4 h-4 md:w-5 md:h-5" />
+            </motion.button>
+
+            {/* ── Notification bell ── */}
+            <div className="relative" ref={notifPanelRef}>
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => {
+                setShowNotifPanel(v => !v);
+                if (!showNotifPanel) markAllSeen();
+              }}
+              className="relative p-2 md:p-2.5 bg-white/5 hover:bg-primary/15 rounded-xl border border-white/10 hover:border-primary/30 transition-all"
+              title="Уведомления"
+            >
+              <Bell className="w-4 h-4 md:w-5 md:h-5 text-white/60 hover:text-white" />
+              {newSubmissions.length > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-0.5 bg-primary rounded-full flex items-center justify-center text-[9px] text-white shadow-[0_0_8px_rgba(139,92,246,0.7)]">
+                  {newSubmissions.length > 9 ? '9+' : newSubmissions.length}
+                </span>
+              )}
+            </motion.button>
+
+            <AnimatePresence>
+              {showNotifPanel && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute top-full mt-2 left-0 w-80 bg-[#0f0f1a]/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-[0_8px_40px_rgba(0,0,0,0.5)] z-50 overflow-hidden"
+                >
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-white/8">
+                    <span className="text-sm text-white/80">Уведомления</span>
+                    <button
+                      onClick={() => setShowNotifPanel(false)}
+                      className="text-white/40 hover:text-white/80 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {(() => {
+                    const pendingAll = assignments.flatMap(a =>
+                      a.submissions
+                        .filter(s => s.status === 'pending')
+                        .map(s => ({ submission: s, assignment: a }))
+                    ).sort((a, b) => b.submission.submittedAt - a.submission.submittedAt);
+
+                    if (pendingAll.length === 0) {
+                      return (
+                        <div className="flex flex-col items-center justify-center py-10 gap-2 text-white/30">
+                          <Bell className="w-8 h-8 opacity-30" />
+                          <span className="text-xs">Новых уведомлений нет</span>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="max-h-80 overflow-y-auto divide-y divide-white/5">
+                        {pendingAll.map(({ submission, assignment }) => {
+                          const isNew = !seenSubmissionIds.has(submission.id);
+                          const minutesAgo = Math.max(0, Math.floor((Date.now() - submission.submittedAt) / 60000));
+                          const timeStr = minutesAgo < 60
+                            ? `${minutesAgo} мин назад`
+                            : `${Math.floor(minutesAgo / 60)} ч назад`;
+                          return (
+                            <button
+                              key={submission.id}
+                              onClick={() => {
+                                setShowNotifPanel(false);
+                                setActiveTab('check');
+                              }}
+                              className="w-full text-left px-4 py-3 hover:bg-white/5 transition-colors flex items-start gap-3 group"
+                            >
+                              <div className="mt-0.5 w-8 h-8 rounded-xl bg-primary/15 border border-primary/20 flex items-center justify-center shrink-0">
+                                <FileText className="w-4 h-4 text-primary/80" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs text-white/90 truncate">{submission.studentName}</span>
+                                  {isNew && (
+                                    <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-white/40 truncate mt-0.5">
+                                  сдал «{assignment.title}»
+                                </div>
+                                <div className="text-[10px] text-white/25 mt-0.5">{timeStr}</div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+
+                  <div className="border-t border-white/8 px-4 py-2.5">
+                    <button
+                      onClick={() => {
+                        setShowNotifPanel(false);
+                        setActiveTab('check');
+                      }}
+                      className="w-full text-center text-xs text-primary/70 hover:text-primary transition-colors py-0.5"
+                    >
+                      Перейти к проверке →
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+            </div>{/* end bell wrapper */}
+
+            {/* ── Leaderboard ── */}
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => setShowLeaderboard(true)}
+              className="p-2 md:p-2.5 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 hover:border-white/20 transition-all"
+              title="Рейтинг учеников"
+            >
+              <Trophy className="w-4 h-4 md:w-5 md:h-5 text-white/60" />
+            </motion.button>
+
+            {/* ── Students by class ── */}
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => setShowStudentsList(true)}
+              className="p-2 md:p-2.5 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 hover:border-white/20 transition-all"
+              title="Ученики по классам"
+            >
+              <GraduationCap className="w-4 h-4 md:w-5 md:h-5 text-white/60" />
+            </motion.button>
+          </div>{/* end left group */}
 
           <div
             onClick={() => setShowProfileModal(true)}
@@ -967,7 +1109,16 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
                           {subjects.map((sub, idx) => (
                             <span key={idx} className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary border border-primary/20 rounded-xl text-sm">
                               {sub}
-                              <button onClick={() => setSubjects(subjects.filter(s => s !== sub))} className="hover:text-red-400 transition-colors ml-1">
+                              <button onClick={async () => {
+                                const newSubjects = subjects.filter(s => s !== sub);
+                                setSubjects(newSubjects);
+                                try {
+                                  await apiRequest('/teacher/subjects', {
+                                    method: 'POST',
+                                    body: JSON.stringify({ subjects: newSubjects }),
+                                  });
+                                } catch {}
+                              }} className="hover:text-red-400 transition-colors ml-1">
                                 <X className="w-3.5 h-3.5" />
                               </button>
                             </span>
@@ -980,23 +1131,37 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
                             type="text" 
                             placeholder="Добавить предмет..." 
                             className="bg-black/50 border border-white/10 rounded-xl px-4 py-2 text-sm text-white flex-1 focus:outline-none focus:border-primary/50"
-                            onKeyDown={(e) => {
+                            onKeyDown={async (e) => {
                               if (e.key === 'Enter') {
                                 const val = e.currentTarget.value.trim();
                                 if (val && !subjects.includes(val)) {
-                                  setSubjects([...subjects, val]);
+                                  const newSubjects = [...subjects, val];
+                                  setSubjects(newSubjects);
                                   e.currentTarget.value = '';
+                                  try {
+                                    await apiRequest('/teacher/subjects', {
+                                      method: 'POST',
+                                      body: JSON.stringify({ subjects: newSubjects }),
+                                    });
+                                  } catch {}
                                 }
                               }
                             }}
                           />
                           <button 
-                            onClick={() => {
+                            onClick={async () => {
                               const input = document.getElementById('newSubjectInput') as HTMLInputElement;
                               const val = input.value.trim();
                               if (val && !subjects.includes(val)) {
-                                setSubjects([...subjects, val]);
+                                const newSubjects = [...subjects, val];
+                                setSubjects(newSubjects);
                                 input.value = '';
+                                try {
+                                  await apiRequest('/teacher/subjects', {
+                                    method: 'POST',
+                                    body: JSON.stringify({ subjects: newSubjects }),
+                                  });
+                                } catch {}
                               }
                             }}
                             className="px-4 py-2 bg-primary/20 text-primary rounded-xl text-sm font-medium hover:bg-primary/30 transition-colors shrink-0"
@@ -1051,6 +1216,8 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
                       />
                     </button>
                   </div>
+
+  
 
                   {onLogout && (
                     <button
@@ -1113,37 +1280,70 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
                   )}
 
                   <div className="space-y-4">
-                    <div className="p-4 bg-white/5 rounded-2xl border border-white/10">
-                      <p className="text-white/60 text-sm mb-2">Информация о задании</p>
-                      <p className="text-white font-medium">{selectedSubmission.assignment.description || 'Нет описания'}</p>
+                    {/* Meta info */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-3 bg-white/5 rounded-xl border border-white/10">
+                        <p className="text-white/40 text-xs mb-1">Ученик</p>
+                        <p className="text-white font-semibold text-sm">{selectedSubmission.submission.studentName}</p>
+                      </div>
+                      <div className="p-3 bg-white/5 rounded-xl border border-white/10">
+                        <p className="text-white/40 text-xs mb-1">Сдано</p>
+                        <p className="text-white font-semibold text-sm">
+                          {new Date(selectedSubmission.submission.submittedAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
                     </div>
+
+                    {selectedSubmission.assignment.description && (
+                      <div className="p-4 bg-white/5 rounded-2xl border border-white/10">
+                        <p className="text-white/40 text-xs mb-1.5">Условие задания</p>
+                        <p className="text-white/80 text-sm leading-relaxed">{selectedSubmission.assignment.description}</p>
+                      </div>
+                    )}
 
                     <div className="flex items-center gap-3 p-4 bg-primary/10 rounded-2xl border border-primary/20">
-                      <div className="w-12 h-12 bg-primary/20 rounded-xl flex items-center justify-center">
-                        <span className="text-2xl font-bold text-primary">+{selectedSubmission.submission.xp}</span>
+                      <div className="w-11 h-11 bg-primary/20 rounded-xl flex items-center justify-center shrink-0">
+                        <span className="text-lg font-bold text-primary">+{selectedSubmission.submission.xp}</span>
                       </div>
                       <div>
-                        <p className="text-white font-medium">Награда за правильное решение</p>
-                        <p className="text-white/60 text-sm">Очки опыта будут начислены ученику</p>
+                        <p className="text-white font-semibold text-sm">XP за принятие работы</p>
+                        <p className="text-white/50 text-xs">Будет начислено ученику сразу после нажатия «Принять»</p>
                       </div>
                     </div>
 
-                    <div className="flex gap-3 pt-2">
-                      <button
-                        onClick={() => handleRejectSubmission(selectedSubmission.assignment.id, selectedSubmission.submission.id)}
-                        className="flex-1 py-3.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 font-medium rounded-xl border border-red-500/30 transition-all flex items-center justify-center gap-2"
-                      >
-                        <XCircle className="w-5 h-5" />
-                        Отклонить работу
-                      </button>
-                      <button
-                        onClick={() => handleApproveSubmission(selectedSubmission.assignment.id, selectedSubmission.submission.id)}
-                        className="flex-1 py-3.5 bg-green-500/10 hover:bg-green-500/20 text-green-400 font-medium rounded-xl border border-green-500/30 transition-all flex items-center justify-center gap-2"
-                      >
-                        <CheckCircle className="w-5 h-5" />
-                        Принять работу (+{selectedSubmission.submission.xp} XP)
-                      </button>
-                    </div>
+                    {/* Action buttons — only for pending */}
+                    {selectedSubmission.submission.status === 'pending' && (
+                      <div className="flex gap-3 pt-1">
+                        <button
+                          onClick={() => handleRejectSubmission(selectedSubmission.assignment.id, selectedSubmission.submission.id)}
+                          className="flex-1 py-3.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 font-semibold rounded-xl border border-red-500/30 transition-all flex items-center justify-center gap-2"
+                        >
+                          <XCircle className="w-5 h-5" />
+                          На доработку
+                        </button>
+                        <button
+                          onClick={() => handleApproveSubmission(selectedSubmission.assignment.id, selectedSubmission.submission.id)}
+                          className="flex-1 py-3.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 font-semibold rounded-xl border border-emerald-500/30 transition-all flex items-center justify-center gap-2"
+                        >
+                          <CheckCircle className="w-5 h-5" />
+                          Принять работу
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Status badge for already-reviewed */}
+                    {selectedSubmission.submission.status !== 'pending' && (
+                      <div className={`flex items-center justify-center gap-2 py-3 rounded-xl border ${
+                        selectedSubmission.submission.status === 'approved'
+                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                          : 'bg-red-500/10 border-red-500/20 text-red-400'
+                      }`}>
+                        {selectedSubmission.submission.status === 'approved'
+                          ? <><CheckCircle className="w-4 h-4" /> Работа принята</>
+                          : <><XCircle className="w-4 h-4" /> Работа отклонена</>
+                        }
+                      </div>
+                    )}
                   </div>
                 </div>
               </motion.div>
@@ -1240,89 +1440,128 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
                   )}
                 </AnimatePresence>
                 </div>
+
               </div>
             ) : (
-              <div className="space-y-4">
-                <AnimatePresence mode="popLayout">
-                  {pendingSubmissionsCount > 0 ? (
-                    assignments.flatMap(assignment =>
-                      assignment.submissions
-                        .filter(s => s.status === 'pending')
-                        .map(submission => (
-                          <motion.div
-                            key={`${assignment.id}-${submission.id}`}
-                            layout
-                            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.95, y: -20 }}
-                            transition={{ duration: 0.3 }}
-                            className="relative bg-[#1A1A1A]/80 backdrop-blur-xl rounded-2xl p-6 border border-white/5 hover:border-primary/40 hover:shadow-[0_8px_30px_rgba(139,92,246,0.15)] transition-all duration-300 group overflow-hidden"
-                          >
-                            <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-                            <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/5 group-hover:ring-primary/20 pointer-events-none transition-all duration-500" />
-
-                            <div className="relative z-10 flex flex-col md:flex-row gap-6">
-                              <div className="flex-1 space-y-4">
-                                <div>
-                                  <h3 className="text-lg font-medium text-white/90 mb-1">{assignment.title}</h3>
-                                  <p className="text-white/50 text-sm">{assignment.subject} • {Array.isArray(assignment.class) ? assignment.class.join(', ') : assignment.class}</p>
+              <div className="space-y-6">
+                {/* ── Pending submissions ── */}
+                {pendingSubmissionsCount > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <motion.span
+                        animate={{ opacity: [1, 0.3, 1] }}
+                        transition={{ duration: 1.4, repeat: Infinity }}
+                        className="w-2 h-2 rounded-full bg-amber-400"
+                      />
+                      <h3 className="text-sm font-semibold text-white/70 uppercase tracking-wide">
+                        Ожидают проверки — {pendingSubmissionsCount}
+                      </h3>
+                    </div>
+                    <AnimatePresence mode="popLayout">
+                      {assignments.flatMap(assignment =>
+                        assignment.submissions
+                          .filter(s => s.status === 'pending')
+                          .sort((a, b) => a.submittedAt - b.submittedAt)
+                          .map(submission => (
+                            <motion.div
+                              key={`${assignment.id}-${submission.id}`}
+                              layout
+                              initial={{ opacity: 0, y: 16 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, scale: 0.96, y: -8 }}
+                              transition={{ duration: 0.25 }}
+                              className="bg-[#1A1A1A]/90 backdrop-blur-xl rounded-2xl border border-amber-500/20 shadow-[0_4px_20px_rgba(0,0,0,0.3)] overflow-hidden"
+                            >
+                              {/* Card header */}
+                              <div className="flex items-center gap-3 px-5 py-4 border-b border-white/5">
+                                <div className="w-9 h-9 rounded-xl bg-primary/20 border border-primary/30 flex items-center justify-center shrink-0">
+                                  <User className="w-4 h-4 text-primary" />
                                 </div>
-
-                                <div className="flex items-center gap-3">
-                                  <div className="w-10 h-10 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center">
-                                    <User className="w-5 h-5 text-primary" />
-                                  </div>
-                                  <div>
-                                    <p className="text-white font-medium">{submission.studentName}</p>
-                                    <p className="text-white/40 text-xs">
-                                      {new Date(submission.submittedAt).toLocaleString('ru-RU')}
-                                    </p>
-                                  </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-white font-semibold text-sm">{submission.studentName}</p>
+                                  <p className="text-white/40 text-xs truncate">
+                                    {assignment.title} · {assignment.subject}
+                                    {' · '}
+                                    {Array.isArray(assignment.class) ? assignment.class.join(', ') : assignment.class}
+                                  </p>
                                 </div>
-
-                                <div className="flex items-center gap-2 pt-2">
-                                  <span className="px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-xs font-medium border border-primary/20">
-                                    +{submission.xp} XP за правильное решение
-                                  </span>
-                                </div>
-                              </div>
-
-                              <div className="flex flex-col gap-3 items-end justify-between">
-                                {submission.screenshotUrl && (
-                                  <button
-                                    onClick={() => {
-                                      setSelectedSubmission({ assignment, submission });
-                                      setShowCheckModal(true);
-                                    }}
-                                    className="px-4 py-2 bg-primary/20 hover:bg-primary/30 text-primary rounded-xl border border-primary/30 transition-all flex items-center gap-2 font-medium"
-                                  >
-                                    <Eye className="w-4 h-4" />
-                                    Просмотреть работу
-                                  </button>
-                                )}
-
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => handleRejectSubmission(assignment.id, submission.id)}
-                                    className="p-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-xl border border-red-500/30 transition-all"
-                                    title="Отклонить"
-                                  >
-                                    <XCircle className="w-5 h-5" />
-                                  </button>
-                                  <button
-                                    onClick={() => handleApproveSubmission(assignment.id, submission.id)}
-                                    className="p-2.5 bg-green-500/10 hover:bg-green-500/20 text-green-400 rounded-xl border border-green-500/30 transition-all"
-                                    title="Принять"
-                                  >
-                                    <CheckCircle className="w-5 h-5" />
-                                  </button>
+                                <div className="shrink-0 text-right">
+                                  <p className="text-white/30 text-xs">
+                                    {new Date(submission.submittedAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                                  </p>
+                                  <span className="text-xs font-semibold text-primary">+{submission.xp} XP</span>
                                 </div>
                               </div>
-                            </div>
-                          </motion.div>
-                        ))
-                    )
-                  ): (
+
+                              {/* Screenshot (if any) */}
+                              {submission.screenshotUrl && (
+                                <div
+                                  className="relative bg-black/40 cursor-zoom-in group/img"
+                                  onClick={() => { setSelectedSubmission({ assignment, submission }); setShowCheckModal(true); }}
+                                >
+                                  <img
+                                    src={submission.screenshotUrl}
+                                    alt="Работа ученика"
+                                    className="w-full max-h-64 object-contain group-hover/img:opacity-90 transition-opacity"
+                                  />
+                                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition-opacity">
+                                    <div className="px-3 py-1.5 bg-black/60 backdrop-blur-sm rounded-xl text-white text-xs flex items-center gap-1.5">
+                                      <Eye className="w-3.5 h-3.5" />
+                                      Увеличить
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* No screenshot placeholder */}
+                              {!submission.screenshotUrl && (
+                                <div className="px-5 py-3 bg-white/[0.02] text-center">
+                                  <p className="text-white/25 text-xs italic">Ученик не прикрепил скриншот</p>
+                                </div>
+                              )}
+
+                              {/* Action buttons */}
+                              <div className="flex gap-0 border-t border-white/5">
+                                <button
+                                  onClick={() => handleRejectSubmission(assignment.id, submission.id)}
+                                  className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-red-500/5 hover:bg-red-500/15 text-red-400 hover:text-red-300 font-semibold text-sm transition-all border-r border-white/5 group/btn"
+                                >
+                                  <XCircle className="w-4 h-4 group-hover/btn:scale-110 transition-transform" />
+                                  На доработку
+                                </button>
+                                <button
+                                  onClick={() => handleApproveSubmission(assignment.id, submission.id)}
+                                  className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-emerald-500/5 hover:bg-emerald-500/15 text-emerald-400 hover:text-emerald-300 font-semibold text-sm transition-all group/btn"
+                                >
+                                  <CheckCircle className="w-4 h-4 group-hover/btn:scale-110 transition-transform" />
+                                  Принять (+{submission.xp} XP)
+                                </button>
+                              </div>
+                            </motion.div>
+                          ))
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
+
+                {/* Empty pending state */}
+                {pendingSubmissionsCount === 0 && (
+                  <div className="flex flex-col items-center justify-center py-10 gap-3 text-center">
+                    <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+                      <CheckCircle className="w-7 h-7 text-emerald-400" />
+                    </div>
+                    <p className="text-white/50 text-sm">Все работы проверены!</p>
+                  </div>
+                )}
+
+                {/* ── History: reviewed submissions ── */}
+                {assignments.some(a => a.submissions.some(s => s.status !== 'pending')) && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-px bg-white/5" />
+                      <span className="text-xs text-white/30 font-medium px-2">История проверок</span>
+                      <div className="flex-1 h-px bg-white/5" />
+                    </div>
                     <TeacherSubmissionsView
                       assignments={assignments}
                       onViewSubmission={(assignment, submission) => {
@@ -1330,13 +1569,60 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
                         setShowCheckModal(true);
                       }}
                     />
-                  )}
-                </AnimatePresence>
+                  </div>
+                )}
               </div>
             )}
           </motion.div>
+
         </main>
       </div>
+
+      {/* ── Leaderboard Modal ── */}
+      <AnimatePresence>
+        {showLeaderboard && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/70 backdrop-blur-md z-[70] flex items-center justify-center p-4"
+            onClick={() => setShowLeaderboard(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 24 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 24 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+              className="w-full max-w-lg bg-[#141414] rounded-3xl border border-white/10 shadow-[0_0_80px_rgba(139,92,246,0.15)] overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-white/[0.02]">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-1.5 bg-yellow-500/15 rounded-xl border border-yellow-500/20">
+                    <Trophy className="w-5 h-5 text-yellow-400" />
+                  </div>
+                  <h2 className="text-lg font-semibold text-white">Рейтинг учеников</h2>
+                </div>
+                <button
+                  onClick={() => setShowLeaderboard(false)}
+                  className="p-2 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 text-white/50 hover:text-white transition-all"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="max-h-[70vh] overflow-y-auto p-4">
+                <Leaderboard listOnly />
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showStudentsList && (
+          <ClassStudentsModal onClose={() => setShowStudentsList(false)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

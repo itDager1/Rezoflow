@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { GraduationCap, Plus, FileText, Mic, Image, X, Sparkles, Loader2, Archive, User, Trophy, Camera, Target, Star, Medal, Settings, Bell } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { GraduationCap, Plus, FileText, Mic, Image as ImageIcon, X, Sparkles, Loader2, Archive, User, Trophy, Camera, Target, Star, Medal, Settings, Bell, RotateCcw, XCircle } from 'lucide-react';
 import { TaskCard } from './TaskCard';
 import { StudentClassBadge } from './StudentClassBadge';
 import { motion, AnimatePresence } from 'motion/react';
@@ -8,6 +8,7 @@ import { apiRequest, getStoredToken } from '../utils/api';
 
 import { parseTaskWithAI, transcribeAudio } from '../utils/ai';
 import { StudentAIChat } from './StudentAIChat';
+import { Leaderboard } from './Leaderboard';
 
 interface StudentDashboardProps {
   userName: string;
@@ -15,8 +16,6 @@ interface StudentDashboardProps {
   studentClass: string; // Формат: "5А", "8Б" и т.д.
   isLightGradient: boolean;
   setIsLightGradient: (value: boolean) => void;
-  isSnowEnabled: boolean;
-  setIsSnowEnabled: (value: boolean) => void;
   onLogout?: () => void;
 }
 
@@ -48,7 +47,7 @@ interface NotificationItem {
   taskId?: number;
 }
 
-export function StudentDashboard({ userName, userEmail, studentClass, isLightGradient, setIsLightGradient, isSnowEnabled, setIsSnowEnabled, onLogout }: StudentDashboardProps) {
+export function StudentDashboard({ userName, userEmail, studentClass, isLightGradient, setIsLightGradient, onLogout }: StudentDashboardProps) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [addMode, setAddMode] = useState<'selection' | 'text' | 'voice' | 'photo'>('selection');
   const [tasks, setTasks] = useState<Task[]>(() => {
@@ -67,6 +66,15 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
       return [];
     }
   });
+  const [rejectedTasks, setRejectedTasks] = useState<Task[]>(() => {
+    const saved = localStorage.getItem(`rezoflow_student_rejected_${userEmail}`);
+    try {
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [activeTab, setActiveTab] = useState<'active' | 'rework'>('active');
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [xp, setXp] = useState(() => {
@@ -96,12 +104,32 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
   }, [completedTasks, userEmail]);
 
   useEffect(() => {
+    localStorage.setItem(`rezoflow_student_rejected_${userEmail}`, JSON.stringify(rejectedTasks));
+  }, [rejectedTasks, userEmail]);
+
+  useEffect(() => {
     localStorage.setItem(`rezoflow_student_notifications_${userEmail}`, JSON.stringify(notifications));
   }, [notifications, userEmail]);
 
   useEffect(() => {
     localStorage.setItem(`rezoflow_student_xp_${userEmail}`, xp.toString());
   }, [xp, userEmail]);
+
+  // Sync XP to KV store (debounced 2s) so it appears in the leaderboard
+  const xpSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!userEmail || !getStoredToken()) return;
+    if (xpSyncTimerRef.current) clearTimeout(xpSyncTimerRef.current);
+    xpSyncTimerRef.current = setTimeout(async () => {
+      try {
+        await apiRequest('/leaderboard/sync', {
+          method: 'POST',
+          body: JSON.stringify({ name: userName, studentClass, xp }),
+        });
+      } catch {}
+    }, 2000);
+    return () => { if (xpSyncTimerRef.current) clearTimeout(xpSyncTimerRef.current); };
+  }, [xp, userEmail, userName, studentClass]);
 
   useEffect(() => {
     try {
@@ -111,6 +139,7 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
   }, [avatar, userEmail]);
 
   const unreadCount = notifications.filter(n => !n.read).length;
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
 
   const notificationsRef = useRef<HTMLDivElement>(null);
 
@@ -200,6 +229,8 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
 
   // Polling for teacher assignments from server
   const processedTeacherIds = useRef<Set<number>>(new Set());
+  // Mirror of completedTasks teacher IDs — acts as a second guard in fetchTeacherAssignments
+  const completedTeacherIdsRef = useRef<Set<number>>(new Set());
 
   const fetchTeacherAssignments = useCallback(async () => {
     if (!studentClass) return;
@@ -224,10 +255,17 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
 
       assignments.forEach((assignment: any) => {
         const assignmentId = assignment.id as number;
+        // Primary guard: already seen this assignment
         if (processedTeacherIds.current.has(assignmentId)) return;
+        // Secondary guard: task already in completed/approved list
+        if (completedTeacherIdsRef.current.has(assignmentId)) {
+          processedTeacherIds.current.add(assignmentId); // keep in sync
+          return;
+        }
         processedTeacherIds.current.add(assignmentId);
 
         setTasks(prev => {
+          // Tertiary guard: task somehow already in active list
           if (prev.some(t => t.id === assignmentId)) return prev;
 
           notifyUser('Новое задание от учителя', {
@@ -249,6 +287,7 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
             fromTeacher: true,
             teacherName: assignment.teacherName || 'Учитель',
             teacherEmail: assignment.teacherEmail,
+            teacherSubjects: Array.isArray(assignment.teacherSubjects) ? assignment.teacherSubjects : [],
           }, ...prev];
         });
       });
@@ -262,8 +301,31 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
     tasks.forEach(t => {
       if (t.fromTeacher) processedTeacherIds.current.add(t.id);
     });
+    // Also seed from completedTasks so finished teacher assignments
+    // don't get re-added to the active list after a page reload.
+    completedTasks.forEach(t => {
+      if (t.fromTeacher) processedTeacherIds.current.add(t.id);
+    });
+    // Seed from rejectedTasks — they are in the rework tab, not active list
+    rejectedTasks.forEach(t => {
+      if (t.fromTeacher) processedTeacherIds.current.add(t.id);
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep both refs in sync whenever completedTasks changes —
+  // ensures approved/pending teacher tasks can NEVER be re-added to the
+  // active list, even across reloads or rapid state transitions.
+  useEffect(() => {
+    const ids = new Set<number>();
+    completedTasks.forEach(t => {
+      if (t.fromTeacher) {
+        ids.add(t.id);
+        processedTeacherIds.current.add(t.id);
+      }
+    });
+    completedTeacherIdsRef.current = ids;
+  }, [completedTasks]);
 
   useEffect(() => {
     fetchTeacherAssignments();
@@ -278,7 +340,7 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
 
     try {
       const submissions = await apiRequest<any[]>('/submissions/student');
-      let rejectedTasks: Task[] = [];
+      let newlyRejected: Task[] = [];
       
       setCompletedTasks(prev => {
         let changed = false;
@@ -290,20 +352,21 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
               
               if (sub.status === 'approved') {
                 const difficultyXpMap: Record<string, number> = { Легко: 8, Средне: 20, Сложно: 50, '': 20 };
-                const earnedXp = difficultyXpMap[t.difficulty] ?? 20;
+                const earnedXp = typeof sub.xp === 'number' ? sub.xp : (difficultyXpMap[t.difficulty] ?? 20);
                 setXp(x => x + earnedXp);
                 
-                notifyUser('🎉 Задание одобрено!', {
-                  body: `Учитель проверил «${t.title}». Начислено +${earnedXp} XP!`,
+                notifyUser('🎉 Задание принято!', {
+                  body: `Учитель принял «${t.title}». Начислено +${earnedXp} XP!`,
                   isUrgent: false
                 });
                 return { ...t, status: 'approved' };
               } else if (sub.status === 'rejected') {
                 notifyUser('❌ Задание отклонено', {
-                  body: `Учитель отклонил «${t.title}». Задание возвращено в список активных.`,
+                  body: `Учитель отклонил «${t.title}». Исправь и отправь повторно.`,
                   isUrgent: true
                 });
-                rejectedTasks.push({ ...t, status: undefined, completedAt: undefined, screenshot: undefined, submissionId: undefined });
+                // Keep screenshot so student can see what they previously submitted
+                newlyRejected.push({ ...t, status: 'rejected' as const, submissionId: undefined });
                 return { ...t, status: 'rejected' };
               }
             }
@@ -315,17 +378,21 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
         return changed ? newTasks.filter(t => t.status !== 'rejected') : prev;
       });
 
-      if (rejectedTasks.length > 0) {
-        setTasks(prev => {
-          // Avoid duplicates
+      if (newlyRejected.length > 0) {
+        // Move rejected tasks to the "rework" tab, not back to active list
+        setRejectedTasks(prev => {
           const existingIds = new Set(prev.map(t => t.id));
-          const newUnique = rejectedTasks.filter(rt => !existingIds.has(rt.id));
-          return [...newUnique, ...prev];
+          const unique = newlyRejected.filter(rt => !existingIds.has(rt.id));
+          if (unique.length === 0) return prev;
+          return [...unique, ...prev];
         });
+        // Switch to the rework tab so the student notices
+        setActiveTab('rework');
       }
     } catch {
       // ignore
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [completedTasks]);
 
   useEffect(() => {
@@ -656,10 +723,12 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
   };
 
   const handleTaskComplete = async (taskId: number, screenshot: string | null) => {
-    const taskIndex = tasks.findIndex(t => t.id === taskId);
-    if (taskIndex === -1) return;
+    // Check both active tasks and rejected (rework) tasks
+    const task = tasks.find(t => t.id === taskId) ?? rejectedTasks.find(t => t.id === taskId);
+    if (!task) return;
 
-    const task = tasks[taskIndex];
+    const isFromRework = rejectedTasks.some(t => t.id === taskId);
+
     const difficultyXpMap: Record<string, number> = { Легко: 8, Средне: 20, Сложно: 50, '': 20 };
     const earnedXp = difficultyXpMap[task.difficulty] ?? 20;
     const completedAt = Date.now();
@@ -670,7 +739,16 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
     const timeStr = hours > 0 ? `${hours} ч ${minutes} мин` : `${minutes} мин`;
 
     if (task.fromTeacher) {
-      let subId: string | undefined = undefined;
+      // ── Optimistic update: remove from UI immediately ──
+      if (isFromRework) {
+        setRejectedTasks(prev => prev.filter(t => t.id !== taskId));
+      } else {
+        setTasks(prev => prev.filter(t => t.id !== taskId));
+      }
+      const pendingTask = { ...task, screenshot: screenshot || undefined, completedAt, status: 'pending' as const, submissionId: undefined };
+      setCompletedTasks(prev => [pendingTask, ...prev]);
+
+      // ── API call in background ──
       try {
         const res = await apiRequest<any>(`/assignments/${task.id}/submit`, {
           method: 'POST',
@@ -678,30 +756,30 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
             studentName: userName,
             studentEmail: userEmail,
             screenshot: screenshot || null,
+            difficulty: task.difficulty,
+            xp: earnedXp,
           }),
         });
-        subId = res.submission?.id;
+        const subId: string | undefined = res.submission?.id;
+        if (subId) {
+          setCompletedTasks(prev => prev.map(t => t.id === taskId ? { ...t, submissionId: subId } : t));
+        }
       } catch (err) {
         console.error('Failed to submit assignment to server:', err);
       }
-
-      const completedTask = { ...task, screenshot: screenshot || undefined, completedAt, status: 'pending' as const, submissionId: subId };
-      setCompletedTasks(prev => [completedTask, ...prev]);
-      setTasks(prev => prev.filter(t => t.id !== taskId));
 
       notifyUser('📤 Отправлено на проверку', {
         body: `Задание «${task.title}» отправлено. XP будет начислено после проверки учителем.`,
         isUrgent: false
       });
     } else {
-      setXp(prev => prev + earnedXp);
-
+      // Optimistic removal for self-created tasks too
+      setTasks(prev => prev.filter(t => t.id !== taskId));
       const completedTask = { ...task, screenshot: screenshot || undefined, completedAt, status: 'approved' as const };
       setCompletedTasks(prev => [completedTask, ...prev]);
-      setTasks(prev => prev.filter(t => t.id !== taskId));
 
       notifyUser('✅ Задача выполнена', {
-        body: `«${task.title}» завершена за ${timeStr} · +${earnedXp} XP`,
+        body: `«${task.title}» завершена за ${timeStr}`,
         isUrgent: false
       });
     }
@@ -763,9 +841,37 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
     closeAddForm();
   };
 
-  const sortedTasks = [...tasks].sort((a, b) => {
-    return new Date(a.deadline).getTime() - new Date(b.deadline).getTime();
-  });
+  const sortedTasks = useMemo(() => {
+    // Deduplicate by id before sorting – prevents duplicate React keys in the list
+    const seen = new Set<number>();
+    return [...tasks]
+      .filter(t => { if (seen.has(t.id)) return false; seen.add(t.id); return true; })
+      .sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime());
+  }, [tasks]);
+
+  // Chart data – stable reference so recharts doesn't re-key internal nodes on every render
+  const chartData = useMemo(() => {
+    const days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+    const dayXp = [0, 0, 0, 0, 0, 0, 0];
+    const difficultyMap: Record<string, number> = { 'Легко': 8, 'Средне': 20, 'Сложно': 50 };
+    const now = new Date();
+    const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const currentDayIndex = now.getDay() === 0 ? 6 : now.getDay() - 1;
+    const weekStart = new Date(todayDate);
+    weekStart.setDate(todayDate.getDate() - currentDayIndex);
+
+    completedTasks.forEach(task => {
+      if (task.completedAt && task.status !== 'pending' && task.status !== 'rejected') {
+        const taskDate = new Date(task.completedAt);
+        if (taskDate >= weekStart) {
+          const dayIndex = taskDate.getDay() === 0 ? 6 : taskDate.getDay() - 1;
+          dayXp[dayIndex] += difficultyMap[task.difficulty] || 0;
+        }
+      }
+    });
+
+    return days.map((day, index) => ({ id: `day-${index}`, day, xp: dayXp[index] }));
+  }, [completedTasks]);
 
   const getLevelInfo = (totalXp: number) => {
     let currentLevel = 1;
@@ -900,6 +1006,15 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
                 )}
               </AnimatePresence>
             </div>
+
+            {/* Leaderboard icon button */}
+            <button
+              onClick={() => setShowLeaderboard(true)}
+              className="p-2 md:p-3 bg-white/5 hover:bg-yellow-500/15 rounded-2xl border border-white/10 hover:border-yellow-500/30 backdrop-blur-md transition-all shadow-[0_0_20px_rgba(139,92,246,0.1)] hover:shadow-[0_0_20px_rgba(234,179,8,0.25)] shrink-0"
+              title="Рейтинг учеников"
+            >
+              <Trophy className="w-5 h-5 md:w-6 md:h-6 text-white/80 hover:text-white transition-colors" />
+            </button>
           </div>
 
           <div className="flex-1"></div>
@@ -962,38 +1077,195 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
             </div>
 
             <div className="flex flex-col gap-4">
-              <div className="flex items-center justify-between mb-2 px-1">
-                
-                
+              {/* Tabs */}
+              <div className="flex items-center gap-2 px-1">
+                <button
+                  onClick={() => setActiveTab('active')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all border ${
+                    activeTab === 'active'
+                      ? 'bg-primary/15 text-primary border-primary/30'
+                      : 'bg-white/5 text-white/50 border-white/10 hover:bg-white/10 hover:text-white/80'
+                  }`}
+                >
+                  <FileText className="w-4 h-4" />
+                  Активные
+                  {sortedTasks.length > 0 && (
+                    <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${activeTab === 'active' ? 'bg-primary/30 text-primary' : 'bg-white/10 text-white/40'}`}>
+                      {sortedTasks.length}
+                    </span>
+                  )}
+                </button>
+                <button
+                  onClick={() => setActiveTab('rework')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all border ${
+                    activeTab === 'rework'
+                      ? 'bg-red-500/15 text-red-400 border-red-500/30'
+                      : rejectedTasks.length > 0
+                        ? 'bg-red-500/5 text-red-400/70 border-red-500/20 hover:bg-red-500/10 hover:text-red-400'
+                        : 'bg-white/5 text-white/50 border-white/10 hover:bg-white/10 hover:text-white/80'
+                  }`}
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  На доработку
+                  {rejectedTasks.length > 0 && (
+                    <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${activeTab === 'rework' ? 'bg-red-500/30 text-red-400' : 'bg-red-500/20 text-red-400'}`}>
+                      {rejectedTasks.length}
+                    </span>
+                  )}
+                </button>
               </div>
-              <AnimatePresence mode="popLayout">
-                {sortedTasks.length > 0 ? (
-                  sortedTasks.map((task, idx) => (
-                    <motion.div
-                      key={task.id}
-                      id={`task-${task.id}`}
-                      layout
-                      initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.95, y: -20 }}
-                      transition={{ duration: 0.3, delay: idx * 0.05 }}
-                    >
-                      <TaskCard task={task} onComplete={handleTaskComplete} />
-                    </motion.div>
-                  ))
-                ) : (
+
+              {/* ── На проверке у учителя ── */}
+              {(() => {
+                const pendingTasks = completedTasks.filter(t => t.status === 'pending' && t.fromTeacher);
+                if (pendingTasks.length === 0) return null;
+                return (
                   <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="text-center py-20 px-6 rounded-3xl border border-white/5 bg-white/[0.02] backdrop-blur-md"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="space-y-2"
                   >
-                    <div className="w-16 h-16 mx-auto bg-white/5 rounded-full flex items-center justify-center mb-4">
-                      <FileText className="w-8 h-8 text-white/20" />
+                    <div className="flex items-center gap-2 px-1">
+                      <span className="flex items-center gap-1.5 text-xs font-semibold text-amber-400 uppercase tracking-wide">
+                        <motion.span
+                          animate={{ opacity: [1, 0.4, 1] }}
+                          transition={{ duration: 1.5, repeat: Infinity }}
+                          className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block"
+                        />
+                        На проверке у учителя
+                      </span>
+                      <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/20 text-amber-400">
+                        {pendingTasks.length}
+                      </span>
                     </div>
-                    <p className="text-white/50 text-lg mb-4">
-                      У тебя пока нет заданий. Самое время добавить первое!
-                    </p>
+                    {pendingTasks.map(task => (
+                      <motion.div
+                        key={`pending-${task.id}`}
+                        layout
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className="flex items-center gap-3 p-4 rounded-2xl bg-amber-500/[0.05] border border-amber-500/20 backdrop-blur-sm"
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/25 flex items-center justify-center shrink-0">
+                          <motion.div
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
+                          >
+                            <Loader2 className="w-5 h-5 text-amber-400" />
+                          </motion.div>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white/90 font-medium text-sm truncate">{task.title}</p>
+                          <p className="text-white/40 text-xs mt-0.5">{task.subject} · {task.teacherName || 'Учитель'} проверяет работу</p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <span className="px-2.5 py-1 bg-amber-500/10 text-amber-400 text-[11px] font-semibold rounded-lg border border-amber-500/20">
+                            Ожидание
+                          </span>
+                        </div>
+                      </motion.div>
+                    ))}
                   </motion.div>
+                );
+              })()}
+
+              {/* Active tasks */}
+              <AnimatePresence mode="popLayout">
+                {activeTab === 'active' && (
+                  sortedTasks.length > 0 ? (
+                    sortedTasks.map((task, idx) => (
+                      <motion.div
+                        key={task.id}
+                        id={`task-${task.id}`}
+                        layout
+                        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95, y: -20 }}
+                        transition={{ duration: 0.3, delay: idx * 0.05 }}
+                      >
+                        <TaskCard task={task} onComplete={handleTaskComplete} />
+                      </motion.div>
+                    ))
+                  ) : (
+                    <motion.div
+                      key="empty-active"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="text-center py-20 px-6 rounded-3xl border border-white/5 bg-white/[0.02] backdrop-blur-md"
+                    >
+                      <div className="w-16 h-16 mx-auto bg-white/5 rounded-full flex items-center justify-center mb-4">
+                        <FileText className="w-8 h-8 text-white/20" />
+                      </div>
+                      <p className="text-white/50 text-lg mb-4">
+                        У тебя пока нет заданий. Самое время добавить первое!
+                      </p>
+                    </motion.div>
+                  )
+                )}
+              </AnimatePresence>
+
+              {/* Rework (rejected) tasks */}
+              <AnimatePresence mode="popLayout">
+                {activeTab === 'rework' && (
+                  rejectedTasks.length > 0 ? (
+                    rejectedTasks.map((task, idx) => (
+                      <motion.div
+                        key={task.id}
+                        id={`task-${task.id}`}
+                        layout
+                        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95, y: -20 }}
+                        transition={{ duration: 0.3, delay: idx * 0.05 }}
+                      >
+                        <div className="space-y-2">
+                          {/* Rejection banner */}
+                          <div className="flex items-center gap-3 p-3 bg-red-500/10 rounded-2xl border border-red-500/20">
+                            <div className="w-8 h-8 rounded-xl bg-red-500/15 border border-red-500/25 flex items-center justify-center shrink-0">
+                              <XCircle className="w-4 h-4 text-red-400" />
+                            </div>
+                            <div>
+                              <p className="text-red-400 text-sm font-semibold">Учитель отправил на доработку</p>
+                              <p className="text-red-400/60 text-xs mt-0.5">Исправь работу и отправь повторно</p>
+                            </div>
+                          </div>
+
+                          {/* Previous submission preview */}
+                          {task.screenshot && (
+                            <div className="bg-[#1A1A1A]/60 backdrop-blur-sm rounded-2xl border border-red-500/15 p-4 space-y-2">
+                              <p className="text-xs text-white/40 flex items-center gap-1.5">
+                                <ImageIcon className="w-3.5 h-3.5 text-red-400/60" />
+                                Твоя предыдущая отправка учителю:
+                              </p>
+                              <div className="relative rounded-xl overflow-hidden border border-white/5 bg-black/40 aspect-video flex items-center justify-center">
+                                <img
+                                  src={task.screenshot}
+                                  alt="Предыдущее решение"
+                                  className="w-full h-full object-contain opacity-75"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Task card for resubmission */}
+                          <TaskCard task={{ ...task, screenshot: undefined, status: undefined }} onComplete={handleTaskComplete} />
+                        </div>
+                      </motion.div>
+                    ))
+                  ) : (
+                    <motion.div
+                      key="empty-rework"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="text-center py-20 px-6 rounded-3xl border border-white/5 bg-white/[0.02] backdrop-blur-md"
+                    >
+                      <div className="w-16 h-16 mx-auto bg-green-500/10 rounded-full flex items-center justify-center mb-4 border border-green-500/20">
+                        <RotateCcw className="w-8 h-8 text-green-400/50" />
+                      </div>
+                      <p className="text-white/50 text-lg">Все задания приняты!</p>
+                      <p className="text-white/30 text-sm mt-1">Отклонённые задания будут появляться здесь</p>
+                    </motion.div>
+                  )
                 )}
               </AnimatePresence>
             </div>
@@ -1075,44 +1347,26 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
                         <div className="space-y-4">
                           <ResponsiveContainer width="100%" height={250}>
                             <LineChart
-                              data={(() => {
-                                const days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-                                const dayXp = [0, 0, 0, 0, 0, 0, 0];
-                                
-                                const difficultyMap: Record<string, number> = { 'Легко': 8, 'Средне': 20, 'Сложно': 50 };
-                                const now = new Date();
-                                const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                                const currentDayIndex = now.getDay() === 0 ? 6 : now.getDay() - 1;
-                                
-                                const weekStart = new Date(todayDate);
-                                weekStart.setDate(todayDate.getDate() - currentDayIndex);
-
-                                completedTasks.forEach(task => {
-                                  if (task.completedAt && task.status !== 'pending' && task.status !== 'rejected') {
-                                    const taskDate = new Date(task.completedAt);
-                                    if (taskDate >= weekStart) {
-                                      const dayIndex = taskDate.getDay() === 0 ? 6 : taskDate.getDay() - 1;
-                                      dayXp[dayIndex] += difficultyMap[task.difficulty] || 0;
-                                    }
-                                  }
-                                });
-
-                                return days.map((day, index) => ({ day, xp: dayXp[index] }));
-                              })()}
+                              data={chartData}
                               margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
                             >
-                              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                              <CartesianGrid key="grid" strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                               <XAxis
+                                key="x-axis"
                                 dataKey="day"
                                 stroke="rgba(255,255,255,0.3)"
                                 tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 12 }}
                               />
                               <YAxis
+                                key="y-axis"
                                 stroke="rgba(255,255,255,0.3)"
                                 tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 12 }}
                                 tickFormatter={(value) => `${value}`}
+                                allowDecimals={false}
+                                domain={[0, 'auto']}
                               />
                               <Tooltip
+                                key="tooltip"
                                 contentStyle={{
                                   backgroundColor: 'rgba(26, 26, 26, 0.95)',
                                   border: '1px solid rgba(139, 92, 246, 0.3)',
@@ -1124,12 +1378,14 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
                                 formatter={(value: number) => [`${value} XP`, 'Получено']}
                               />
                               <Line
+                                key="line-xp"
                                 type="monotone"
                                 dataKey="xp"
                                 stroke="#8B5CF6"
                                 strokeWidth={3}
                                 dot={{ fill: '#8B5CF6', r: 4, strokeWidth: 2, stroke: '#fff' }}
                                 activeDot={{ r: 6, fill: '#8B5CF6', stroke: '#fff', strokeWidth: 2 }}
+                                isAnimationActive={false}
                               />
                             </LineChart>
                           </ResponsiveContainer>
@@ -1225,17 +1481,10 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
                                         </>
                                       );
                                     })()}
-                                    {/* Личные задания — XP сразу */}
-                                    {!task.fromTeacher && (() => {
-                                      const difficultyXpMap: Record<string, number> = { Легко: 8, Средне: 20, Сложно: 50, '': 20 };
-                                      const earnedXp = difficultyXpMap[task.difficulty] ?? 20;
-                                      return (
-                                        <>
-                                          <span className="px-2 py-0.5 bg-green-500/20 text-green-400 text-[10px] rounded-lg border border-green-500/30">✓ Выполнено</span>
-                                          <span className="px-2 py-0.5 bg-primary/20 text-primary text-[10px] rounded-lg border border-primary/30">+{earnedXp} XP</span>
-                                        </>
-                                      );
-                                    })()}
+                                    {/* Личные задания */}
+                                    {!task.fromTeacher && (
+                                      <span className="px-2 py-0.5 bg-green-500/20 text-green-400 text-[10px] rounded-lg border border-green-500/30">✓ Выполнено</span>
+                                    )}
                                   </div>
                                 </div>
                                 {task.screenshot && (
@@ -1405,7 +1654,7 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
                       <div className="relative">
                         <button onClick={() => document.getElementById('imageUploadFormat')?.click()} className="flex items-center gap-4 p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-left w-full">
                           <div className="w-12 h-12 rounded-full bg-[#f59e0b]/20 flex items-center justify-center text-[#f59e0b] shrink-0">
-                            <Image className="w-6 h-6" />
+                            <ImageIcon className="w-6 h-6" />
                           </div>
                           <div>
                             <h4 className="text-white font-medium text-lg">По фото</h4>
@@ -1734,8 +1983,49 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
           </AnimatePresence>
         </main>
 
-
       </div>
+
+      {/* ── Leaderboard Modal ── */}
+      <AnimatePresence>
+        {showLeaderboard && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/70 backdrop-blur-md z-[70] flex items-center justify-center p-4"
+            onClick={() => setShowLeaderboard(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 24 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 24 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+              className="w-full max-w-lg bg-[#141414] rounded-3xl border border-white/10 shadow-[0_0_80px_rgba(139,92,246,0.15)] overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Modal header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-white/[0.02]">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-1.5 bg-yellow-500/15 rounded-xl border border-yellow-500/20">
+                    <Trophy className="w-5 h-5 text-yellow-400" />
+                  </div>
+                  <h2 className="text-lg font-semibold text-white">Рейтинг учеников</h2>
+                </div>
+                <button
+                  onClick={() => setShowLeaderboard(false)}
+                  className="p-2 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 text-white/50 hover:text-white transition-all"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              {/* Modal body */}
+              <div className="max-h-[70vh] overflow-y-auto custom-scrollbar p-4">
+                <Leaderboard currentUserEmail={userEmail} listOnly />
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

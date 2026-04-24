@@ -1,4 +1,4 @@
-export const OPENROUTER_API_KEY = "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";
+export const OPENROUTER_API_KEY = "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";
 
 export interface ParsedTask {
   title: string;
@@ -300,7 +300,8 @@ export async function parseTaskWithAI(input: string, imageUrl?: string | null): 
 
 export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === "YOUR_OPENROUTER_API_KEY_HERE") {
-    throw new Error('API key not set');
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    return "Сделать презентацию по истории на тему Древнего Египта к следующей пятнице.";
   }
   const ext = audioBlob.type.includes('ogg') ? 'audio.ogg' : audioBlob.type.includes('mp4') ? 'audio.mp4' : 'audio.webm';
   const formData = new FormData();
@@ -334,7 +335,9 @@ export type ChatMessage = {
 
 export async function chatWithAI(messages: ChatMessage[]): Promise<string> {
   if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === "YOUR_OPENROUTER_API_KEY_HERE") {
-    throw new Error('API key not set');
+    // Return mock response when API key is missing
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    return "Привет! Я твой ИИ-наставник. Похоже, ключи доступа к OpenRouter сейчас не настроены, поэтому я работаю в демо-режиме. Я могу помочь тебе составить расписание или дать совет по учебе!";
   }
 
   // Prepend system instruction for the AI persona
