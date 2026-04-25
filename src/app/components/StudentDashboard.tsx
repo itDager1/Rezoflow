@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { GraduationCap, Plus, FileText, Mic, Image as ImageIcon, X, Sparkles, Loader2, Archive, User, Trophy, Camera, Target, Star, Medal, Settings, Bell, RotateCcw, XCircle } from 'lucide-react';
+import { GraduationCap, Plus, FileText, Mic, Image as ImageIcon, X, Sparkles, Loader2, Archive, User, Trophy, Camera, Target, Star, Medal, Settings, Bell, RotateCcw, XCircle, Clock, ChevronDown, RefreshCw } from 'lucide-react';
 import { TaskCard } from './TaskCard';
 import { StudentClassBadge } from './StudentClassBadge';
 import { motion, AnimatePresence } from 'motion/react';
@@ -9,6 +9,9 @@ import { apiRequest, getStoredToken } from '../utils/api';
 import { parseTaskWithAI, transcribeAudio } from '../utils/ai';
 import { StudentAIChat } from './StudentAIChat';
 import { Leaderboard } from './Leaderboard';
+import { CharacterTab } from './CharacterTab';
+import { StudentProfileModal } from './StudentProfileModal';
+import type { LeaderboardEntry } from './Leaderboard';
 
 interface StudentDashboardProps {
   userName: string;
@@ -77,6 +80,20 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
   const [activeTab, setActiveTab] = useState<'active' | 'rework'>('active');
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [pendingCollapsed, setPendingCollapsed] = useState(false);
+  // ── Pending updates (background-fetched) — never auto-applied to visible list ──
+  const [pendingTeacherTasks, setPendingTeacherTasks] = useState<Task[]>([]);
+  // pendingRejectedTasks IS persisted so that reload before clicking "Показать" doesn't lose rework notification
+  const [pendingRejectedTasks, setPendingRejectedTasks] = useState<Task[]>(() => {
+    try {
+      const saved = localStorage.getItem(`rezoflow_pending_rejected_${userEmail}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+  const latestServerAssignmentsRef = useRef<any[]>([]);
+  // Guard: set of assignment IDs for which XP has already been awarded this session.
+  // Prevents double-awarding if two polling cycles fire before React re-renders.
+  const xpAwardedAssignmentIds = useRef<Set<number>>(new Set());
   const [xp, setXp] = useState(() => {
     const saved = localStorage.getItem(`rezoflow_student_xp_${userEmail}`);
     return saved ? parseInt(saved) : 0;
@@ -106,6 +123,11 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
   useEffect(() => {
     localStorage.setItem(`rezoflow_student_rejected_${userEmail}`, JSON.stringify(rejectedTasks));
   }, [rejectedTasks, userEmail]);
+
+  // Persist pendingRejectedTasks so "Показать" survives page reloads
+  useEffect(() => {
+    localStorage.setItem(`rezoflow_pending_rejected_${userEmail}`, JSON.stringify(pendingRejectedTasks));
+  }, [pendingRejectedTasks, userEmail]);
 
   useEffect(() => {
     localStorage.setItem(`rezoflow_student_notifications_${userEmail}`, JSON.stringify(notifications));
@@ -140,6 +162,21 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
 
   const unreadCount = notifications.filter(n => !n.read).length;
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState<{ entry: LeaderboardEntry; rank: number } | null>(null);
+
+  const [characterId, setCharacterId] = useState<string>(() => {
+    return localStorage.getItem(`rezoflow_student_character_${userEmail}`) || 'mage';
+  });
+  const [profileTab, setProfileTab] = useState<'profile' | 'character'>('profile');
+
+  useEffect(() => {
+    localStorage.setItem(`rezoflow_student_character_${userEmail}`, characterId);
+    // Sync to kv_store so other users can view this student's character
+    apiRequest('/profile/char', {
+      method: 'POST',
+      body: JSON.stringify({ characterId }),
+    }).catch(() => {});
+  }, [characterId, userEmail]);
 
   const notificationsRef = useRef<HTMLDivElement>(null);
 
@@ -227,6 +264,25 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
     }
   };
 
+  // ── Daily login XP ──────────────────────────────────────────────────────
+  useEffect(() => {
+    const DAILY_XP = 10;
+    const key = `rezoflow_daily_login_${userEmail}`;
+    const today = new Date().toISOString().split('T')[0];
+    const lastLogin = localStorage.getItem(key);
+    if (lastLogin === today) return;
+    localStorage.setItem(key, today);
+    setXp(prev => prev + DAILY_XP);
+    const id = Date.now() + Math.floor(Math.random() * 1000);
+    setNotifications(prev => [{
+      id,
+      title: '🌟 Ежедневный бонус',
+      description: `+${DAILY_XP} XP за вход на сайт сегодня! Возвращайся завтра за новым бонусом.`,
+      time: 'Только что',
+      read: false,
+    }, ...prev]);
+  }, [userEmail]);
+
   // Polling for teacher assignments from server
   const processedTeacherIds = useRef<Set<number>>(new Set());
   // Mirror of completedTasks teacher IDs — acts as a second guard in fetchTeacherAssignments
@@ -234,46 +290,31 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
 
   const fetchTeacherAssignments = useCallback(async () => {
     if (!studentClass) return;
-    // Skip if no auth token (e.g. design preview mode)
     if (!getStoredToken()) return;
     try {
       const assignments = await apiRequest<any[]>(`/assignments/class?name=${encodeURIComponent(studentClass)}`);
-      
-      const serverAssignmentIds = new Set(assignments.map((a: any) => a.id as number));
-
-      // Remove deleted teacher assignments
-      setTasks(prev => {
-        const filtered = prev.filter(t => !t.fromTeacher || serverAssignmentIds.has(t.id));
-        // Clean up processed IDs so they can be re-added if necessary
-        prev.forEach(t => {
-          if (t.fromTeacher && !serverAssignmentIds.has(t.id)) {
-            processedTeacherIds.current.delete(t.id);
-          }
-        });
-        return filtered.length !== prev.length ? filtered : prev;
-      });
+      // Store latest server state for use when the user manually applies updates
+      latestServerAssignmentsRef.current = assignments;
 
       assignments.forEach((assignment: any) => {
         const assignmentId = assignment.id as number;
-        // Primary guard: already seen this assignment
+        // Already seen this assignment
         if (processedTeacherIds.current.has(assignmentId)) return;
-        // Secondary guard: task already in completed/approved list
+        // Already in completed/approved list
         if (completedTeacherIdsRef.current.has(assignmentId)) {
-          processedTeacherIds.current.add(assignmentId); // keep in sync
+          processedTeacherIds.current.add(assignmentId);
           return;
         }
         processedTeacherIds.current.add(assignmentId);
 
-        setTasks(prev => {
-          // Tertiary guard: task somehow already in active list
+        // Queue into pending — DO NOT touch `tasks` state directly (prevents flicker)
+        setPendingTeacherTasks(prev => {
           if (prev.some(t => t.id === assignmentId)) return prev;
-
           notifyUser('Новое задание от учителя', {
             body: `${assignment.title} (${assignment.subject})`,
             isUrgent: false,
             taskId: assignmentId,
           });
-
           return [{
             id: assignmentId,
             title: assignment.title || 'Новое задание',
@@ -296,6 +337,37 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
     }
   }, [studentClass]);
 
+  /** Apply pending teacher tasks + remove server-deleted ones — triggered by user */
+  const applyPendingTasks = useCallback(() => {
+    const serverIds = new Set(latestServerAssignmentsRef.current.map((a: any) => a.id as number));
+    setTasks(prev => {
+      // Remove teacher tasks that no longer exist on server
+      const cleaned = prev.filter(t => {
+        if (t.fromTeacher && !serverIds.has(t.id)) {
+          processedTeacherIds.current.delete(t.id);
+          return false;
+        }
+        return true;
+      });
+      // Merge pending new tasks (deduplicated)
+      const existingIds = new Set(cleaned.map(t => t.id));
+      const toAdd = pendingTeacherTasks.filter(t => !existingIds.has(t.id));
+      return [...toAdd, ...cleaned];
+    });
+    setPendingTeacherTasks([]);
+  }, [pendingTeacherTasks]);
+
+  /** Apply pending rejected (rework) tasks — triggered by user */
+  const applyPendingRejected = useCallback(() => {
+    setRejectedTasks(prev => {
+      const existingIds = new Set(prev.map(t => t.id));
+      const unique = pendingRejectedTasks.filter(t => !existingIds.has(t.id));
+      if (unique.length === 0) return prev;
+      return [...unique, ...prev];
+    });
+    setPendingRejectedTasks([]);
+  }, [pendingRejectedTasks]);
+
   // Seed processed IDs from already-known teacher tasks (prevents re-notifying on reload)
   useEffect(() => {
     tasks.forEach(t => {
@@ -305,9 +377,15 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
     // don't get re-added to the active list after a page reload.
     completedTasks.forEach(t => {
       if (t.fromTeacher) processedTeacherIds.current.add(t.id);
+      // Seed XP guard from already-approved tasks so we never double-award on reload
+      if (t.fromTeacher && t.status === 'approved') xpAwardedAssignmentIds.current.add(t.id);
     });
     // Seed from rejectedTasks — they are in the rework tab, not active list
     rejectedTasks.forEach(t => {
+      if (t.fromTeacher) processedTeacherIds.current.add(t.id);
+    });
+    // Seed from pendingRejectedTasks — persisted across reloads, must not be re-added as "new"
+    pendingRejectedTasks.forEach(t => {
       if (t.fromTeacher) processedTeacherIds.current.add(t.id);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -329,65 +407,75 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
 
   useEffect(() => {
     fetchTeacherAssignments();
-    const interval = setInterval(fetchTeacherAssignments, 8000);
+    const interval = setInterval(fetchTeacherAssignments, 15000);
     return () => clearInterval(interval);
   }, [fetchTeacherAssignments]);
 
   const checkSubmissionStatus = useCallback(async () => {
     if (!getStoredToken()) return;
-    const hasPending = completedTasks.some(t => t.status === 'pending');
+    const hasPending = completedTasks.some(t => t.fromTeacher && t.status === 'pending');
     if (!hasPending) return;
 
     try {
       const submissions = await apiRequest<any[]>('/submissions/student');
       let newlyRejected: Task[] = [];
-      
+
       setCompletedTasks(prev => {
         let changed = false;
         const newTasks = prev.map(t => {
-          if (t.status === 'pending') {
-            const sub = submissions.find(s => s.assignmentId === t.id || s.id === t.submissionId);
-            if (sub && sub.status !== 'pending') {
-              changed = true;
-              
-              if (sub.status === 'approved') {
-                const difficultyXpMap: Record<string, number> = { Легко: 8, Средне: 20, Сложно: 50, '': 20 };
-                const earnedXp = typeof sub.xp === 'number' ? sub.xp : (difficultyXpMap[t.difficulty] ?? 20);
-                setXp(x => x + earnedXp);
-                
-                notifyUser('🎉 Задание принято!', {
-                  body: `Учитель принял «${t.title}». Начислено +${earnedXp} XP!`,
-                  isUrgent: false
-                });
-                return { ...t, status: 'approved' };
-              } else if (sub.status === 'rejected') {
-                notifyUser('❌ Задание отклонено', {
-                  body: `Учитель отклонил «${t.title}». Исправь и отправь повторно.`,
-                  isUrgent: true
-                });
-                // Keep screenshot so student can see what they previously submitted
-                newlyRejected.push({ ...t, status: 'rejected' as const, submissionId: undefined });
-                return { ...t, status: 'rejected' };
-              }
+          // Only check teacher tasks that are currently pending
+          if (!t.fromTeacher || t.status !== 'pending') return t;
+
+          // Match by submissionId first (exact), then fall back to assignmentId
+          const sub = submissions.find(s =>
+            (t.submissionId ? String(s.id) === String(t.submissionId) : false) ||
+            s.assignmentId === t.id
+          );
+          if (!sub || sub.status === 'pending') return t;
+
+          changed = true;
+
+          if (sub.status === 'approved') {
+            const difficultyXpMap: Record<string, number> = { Легко: 8, Средне: 20, Сложно: 50, '': 20 };
+            const earnedXp = typeof sub.xp === 'number' ? sub.xp : (difficultyXpMap[t.difficulty] ?? 20);
+
+            // Guard against double-awarding XP (race condition between polling cycles)
+            if (!xpAwardedAssignmentIds.current.has(t.id)) {
+              xpAwardedAssignmentIds.current.add(t.id);
+              setXp(x => x + earnedXp);
+              notifyUser('🎉 Задание принято!', {
+                body: `Учитель принял «${t.title}». Начислено +${earnedXp} XP!`,
+                isUrgent: false
+              });
             }
+            return { ...t, status: 'approved' as const };
+
+          } else if (sub.status === 'rejected') {
+            // Only notify once per rejection (check pendingRejectedTasks already has it)
+            newlyRejected.push({ ...t, status: 'rejected' as const, submissionId: undefined });
+            return { ...t, status: 'rejected' as const };
           }
+
           return t;
         });
-        
-        // Remove rejected tasks from completed list if they are being returned
         return changed ? newTasks.filter(t => t.status !== 'rejected') : prev;
       });
 
       if (newlyRejected.length > 0) {
-        // Move rejected tasks to the "rework" tab, not back to active list
-        setRejectedTasks(prev => {
+        // Queue into pending — user applies manually from rework tab (no auto-switch, no flicker)
+        setPendingRejectedTasks(prev => {
           const existingIds = new Set(prev.map(t => t.id));
           const unique = newlyRejected.filter(rt => !existingIds.has(rt.id));
           if (unique.length === 0) return prev;
+          // Notify only for truly new rejections
+          unique.forEach(t => {
+            notifyUser('❌ Задание отправлено на доработку', {
+              body: `Учитель отклонил «${t.title}». Открой вкладку «На доработку» и нажми «Показать».`,
+              isUrgent: true
+            });
+          });
           return [...unique, ...prev];
         });
-        // Switch to the rework tab so the student notices
-        setActiveTab('rework');
       }
     } catch {
       // ignore
@@ -396,7 +484,7 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
   }, [completedTasks]);
 
   useEffect(() => {
-    const interval = setInterval(checkSubmissionStatus, 10000);
+    const interval = setInterval(checkSubmissionStatus, 3000);
     return () => clearInterval(interval);
   }, [checkSubmissionStatus]);
 
@@ -418,7 +506,7 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
     }
   }, []);
 
-  // Проверка приближающихся дедлайнов каждую минуту
+  // Проверка приближающих��я дедлайнов каждую минуту
   useEffect(() => {
     const checkDeadlines = () => {
       const now = new Date();
@@ -748,7 +836,6 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
       const pendingTask = { ...task, screenshot: screenshot || undefined, completedAt, status: 'pending' as const, submissionId: undefined };
       setCompletedTasks(prev => [pendingTask, ...prev]);
 
-      // ── API call in background ──
       try {
         const res = await apiRequest<any>(`/assignments/${task.id}/submit`, {
           method: 'POST',
@@ -760,18 +847,28 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
             xp: earnedXp,
           }),
         });
+
         const subId: string | undefined = res.submission?.id;
         if (subId) {
           setCompletedTasks(prev => prev.map(t => t.id === taskId ? { ...t, submissionId: subId } : t));
         }
+
+        notifyUser('📤 Отправлено на проверку', {
+          body: `Задание «${task.title}» отправлено. XP будет начислено после проверки учителем.`,
+          isUrgent: false
+        });
       } catch (err) {
         console.error('Failed to submit assignment to server:', err);
+        // Roll back optimistic update so the student can try again
+        setCompletedTasks(prev => prev.filter(t => t.id !== taskId));
+        if (isFromRework) {
+          setRejectedTasks(prev => [task, ...prev]);
+        } else {
+          setTasks(prev => [task, ...prev]);
+        }
+        alert('Не удалось отправить задание. Проверьте подключение и попробуйте ещё раз.');
+        throw err; // re-throw so TaskCard resets isSubmitting
       }
-
-      notifyUser('📤 Отправлено на проверку', {
-        body: `Задание «${task.title}» отправлено. XP будет начислено после проверки учителем.`,
-        isUrgent: false
-      });
     } else {
       // Optimistic removal for self-created tasks too
       setTasks(prev => prev.filter(t => t.id !== taskId));
@@ -1094,26 +1191,88 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
                       {sortedTasks.length}
                     </span>
                   )}
+                  {pendingTeacherTasks.length > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-primary/40 text-primary animate-pulse">
+                      +{pendingTeacherTasks.length}
+                    </span>
+                  )}
                 </button>
                 <button
                   onClick={() => setActiveTab('rework')}
                   className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all border ${
                     activeTab === 'rework'
                       ? 'bg-red-500/15 text-red-400 border-red-500/30'
-                      : rejectedTasks.length > 0
+                      : rejectedTasks.length > 0 || pendingRejectedTasks.length > 0
                         ? 'bg-red-500/5 text-red-400/70 border-red-500/20 hover:bg-red-500/10 hover:text-red-400'
                         : 'bg-white/5 text-white/50 border-white/10 hover:bg-white/10 hover:text-white/80'
                   }`}
                 >
                   <RotateCcw className="w-4 h-4" />
                   На доработку
-                  {rejectedTasks.length > 0 && (
+                  {(rejectedTasks.length > 0 || pendingRejectedTasks.length > 0) && (
                     <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${activeTab === 'rework' ? 'bg-red-500/30 text-red-400' : 'bg-red-500/20 text-red-400'}`}>
-                      {rejectedTasks.length}
+                      {rejectedTasks.length + pendingRejectedTasks.length}
                     </span>
+                  )}
+                  {pendingRejectedTasks.length > 0 && (
+                    <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse" />
                   )}
                 </button>
               </div>
+
+              {/* ── Refresh banner: new teacher assignments ── */}
+              <AnimatePresence>
+                {pendingTeacherTasks.length > 0 && activeTab === 'active' && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.97 }}
+                    transition={{ duration: 0.25 }}
+                    className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-primary/10 border border-primary/25 backdrop-blur-sm"
+                  >
+                    <div className="w-2 h-2 rounded-full bg-primary animate-pulse shrink-0" />
+                    <span className="flex-1 text-sm text-primary/90">
+                      {pendingTeacherTasks.length === 1
+                        ? 'Новое задание от учителя'
+                        : `${pendingTeacherTasks.length} новых задания от учителя`}
+                    </span>
+                    <button
+                      onClick={applyPendingTasks}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/20 hover:bg-primary/35 text-primary text-xs font-semibold rounded-xl border border-primary/30 transition-all shrink-0"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      Показать
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* ── Refresh banner: rework tab pending ── */}
+              <AnimatePresence>
+                {pendingRejectedTasks.length > 0 && activeTab === 'rework' && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.97 }}
+                    transition={{ duration: 0.25 }}
+                    className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-red-500/10 border border-red-500/25 backdrop-blur-sm"
+                  >
+                    <div className="w-2 h-2 rounded-full bg-red-400 animate-pulse shrink-0" />
+                    <span className="flex-1 text-sm text-red-400/90">
+                      {pendingRejectedTasks.length === 1
+                        ? 'Учитель отправил задание на доработку'
+                        : `${pendingRejectedTasks.length} задания отправлены на доработку`}
+                    </span>
+                    <button
+                      onClick={applyPendingRejected}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/20 hover:bg-red-500/35 text-red-400 text-xs font-semibold rounded-xl border border-red-500/30 transition-all shrink-0"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      Показать
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               {/* ── На проверке у учителя ── */}
               {(() => {
@@ -1125,7 +1284,10 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
                     animate={{ opacity: 1, y: 0 }}
                     className="space-y-2"
                   >
-                    <div className="flex items-center gap-2 px-1">
+                    <button
+                      onClick={() => setPendingCollapsed(v => !v)}
+                      className="w-full flex items-center gap-2 px-1 group"
+                    >
                       <span className="flex items-center gap-1.5 text-xs font-semibold text-amber-400 uppercase tracking-wide">
                         <motion.span
                           animate={{ opacity: [1, 0.4, 1] }}
@@ -1137,34 +1299,49 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
                       <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/20 text-amber-400">
                         {pendingTasks.length}
                       </span>
-                    </div>
-                    {pendingTasks.map(task => (
-                      <motion.div
-                        key={`pending-${task.id}`}
-                        layout
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        className="flex items-center gap-3 p-4 rounded-2xl bg-amber-500/[0.05] border border-amber-500/20 backdrop-blur-sm"
+                      <motion.span
+                        animate={{ rotate: pendingCollapsed ? 0 : -90 }}
+                        transition={{ duration: 0.2 }}
+                        className="ml-auto text-amber-400/60 group-hover:text-amber-400 transition-colors"
                       >
-                        <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/25 flex items-center justify-center shrink-0">
-                          <motion.div
-                            animate={{ rotate: 360 }}
-                            transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
-                          >
-                            <Loader2 className="w-5 h-5 text-amber-400" />
-                          </motion.div>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-white/90 font-medium text-sm truncate">{task.title}</p>
-                          <p className="text-white/40 text-xs mt-0.5">{task.subject} · {task.teacherName || 'Учитель'} проверяет работу</p>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <span className="px-2.5 py-1 bg-amber-500/10 text-amber-400 text-[11px] font-semibold rounded-lg border border-amber-500/20">
-                            Ожидание
-                          </span>
-                        </div>
-                      </motion.div>
-                    ))}
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      </motion.span>
+                    </button>
+                    <AnimatePresence initial={false}>
+                      {pendingCollapsed && (
+                        <motion.div
+                          key="pending-list"
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.25, ease: 'easeInOut' }}
+                          className="overflow-hidden space-y-2"
+                        >
+                          {pendingTasks.map(task => (
+                            <motion.div
+                              key={`pending-${task.id}`}
+                              layout
+                              initial={{ opacity: 0, x: -10 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              className="flex items-center gap-3 p-4 rounded-2xl bg-amber-500/[0.05] border border-amber-500/20 backdrop-blur-sm"
+                            >
+                              <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/25 flex items-center justify-center shrink-0">
+                                <Clock className="w-5 h-5 text-amber-400" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-white/90 font-medium text-sm truncate">{task.title}</p>
+                                <p className="text-white/40 text-xs mt-0.5">{task.subject} · {task.teacherName || 'Учитель'} проверяет работу</p>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <span className="px-2.5 py-1 bg-amber-500/10 text-amber-400 text-[11px] font-semibold rounded-lg border border-amber-500/20">
+                                  Ожидание
+                                </span>
+                              </div>
+                            </motion.div>
+                          ))}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </motion.div>
                 );
               })()}
@@ -1281,15 +1458,35 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
               >
                 <div className="w-full max-w-4xl px-4 md:px-6 flex flex-col gap-6 relative z-10">
                   <div className="flex justify-between items-center bg-[#1A1A1A]/90 p-4 rounded-3xl border border-white/10 backdrop-blur-xl shadow-2xl">
-                    <h2 className="text-xl font-semibold text-white ml-4">Профиль ученика</h2>
+                    <div className="flex items-center gap-2 ml-2">
+                      <button
+                        onClick={() => setProfileTab('profile')}
+                        className={`px-4 py-2 rounded-2xl text-sm font-medium transition-all ${profileTab === 'profile' ? 'bg-primary/20 text-primary border border-primary/30' : 'text-white/50 hover:text-white hover:bg-white/5'}`}
+                      >
+                        👤 Профиль
+                      </button>
+                      <button
+                        onClick={() => setProfileTab('character')}
+                        className={`px-4 py-2 rounded-2xl text-sm font-medium transition-all ${profileTab === 'character' ? 'bg-primary/20 text-primary border border-primary/30' : 'text-white/50 hover:text-white hover:bg-white/5'}`}
+                      >
+                        🎮 Персонаж
+                      </button>
+                    </div>
                     <button 
-                      onClick={() => setShowProfileModal(false)}
+                      onClick={() => { setShowProfileModal(false); setProfileTab('profile'); }}
                       className="p-2 bg-white/5 hover:bg-white/10 rounded-full transition-colors text-white/60 hover:text-white"
                     >
                       <X className="w-6 h-6" />
                     </button>
                   </div>
                   
+                  {profileTab === 'character' ? (
+                    <CharacterTab
+                      xp={xp}
+                      characterId={characterId}
+                      onSelectCharacter={setCharacterId}
+                    />
+                  ) : (
                   <div className="space-y-6">
                     {/* Level Card */}
                     <div className="bg-[#1A1A1A]/90 backdrop-blur-xl rounded-3xl p-6 md:p-10 border border-white/5 shadow-2xl relative overflow-hidden">
@@ -1529,6 +1726,7 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
                       </div>
                     </details>
                   </div>
+                  )}
                 </div>
                 
                 {/* Backdrop closer */}
@@ -2020,10 +2218,26 @@ export function StudentDashboard({ userName, userEmail, studentClass, isLightGra
               </div>
               {/* Modal body */}
               <div className="max-h-[70vh] overflow-y-auto custom-scrollbar p-4">
-                <Leaderboard currentUserEmail={userEmail} listOnly />
+                <Leaderboard
+                  currentUserEmail={userEmail}
+                  listOnly
+                  onSelectStudent={(entry, rank) => setSelectedStudent({ entry, rank })}
+                />
               </div>
             </motion.div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Student Profile Modal ── */}
+      <AnimatePresence>
+        {selectedStudent && (
+          <StudentProfileModal
+            entry={selectedStudent.entry}
+            rank={selectedStudent.rank}
+            currentUserEmail={userEmail}
+            onClose={() => setSelectedStudent(null)}
+          />
         )}
       </AnimatePresence>
     </div>

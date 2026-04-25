@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Calendar, Users, FileText, User, Settings, X, Camera, CheckCircle, XCircle, Eye, Mic, Image as ImageIcon, Loader2, Sparkles, Trash2, Trophy, Bell, GraduationCap } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { parseTaskWithAI, transcribeAudio } from '../utils/ai';
+import { parseTaskWithAI, transcribeAudio, checkHomeworkWithAI, AIHomeworkCheckResult } from '../utils/ai';
 import { apiRequest } from '../utils/api';
 import { ClassAssignmentInfo } from './ClassAssignmentInfo';
 import { TeacherSubmissionsView } from './TeacherSubmissionsView';
@@ -20,6 +20,7 @@ interface TeacherDashboardProps {
 interface Submission {
   id: number;
   studentName: string;
+  studentEmail?: string;
   screenshotUrl?: string;
   submittedAt: number;
   status: 'pending' | 'approved' | 'rejected';
@@ -41,23 +42,51 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
   const [showAddForm, setShowAddForm] = useState(false);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastFetched, setLastFetched] = useState<Date | null>(null);
 
-  const fetchAssignments = useCallback(async () => {
+  // Stable ref: submission IDs that teacher has already approved/rejected locally.
+  // A manual refresh will never revert these back to "pending".
+  const localResolvedRef = useRef<Map<number, 'approved' | 'rejected'>>(new Map());
+
+  // Stable ref: assignment IDs deleted locally. Polling won't restore them even
+  // if kvDel hasn't fully propagated yet.
+  const localDeletedAssignmentIdsRef = useRef<Set<number>>(new Set());
+
+  const fetchAssignments = useCallback(async (silent = false) => {
     if (!userEmail) return;
+    if (silent) setIsRefreshing(true);
+    else setIsLoading(true);
     try {
       const data = await apiRequest<Assignment[]>(`/assignments/teacher?email=${encodeURIComponent(userEmail)}`);
-      setAssignments(data);
+      setAssignments(() => {
+        return data
+          // Filter out any assignments that were deleted locally in this session
+          .filter(a => !localDeletedAssignmentIdsRef.current.has(a.id))
+          .map(a => ({
+            ...a,
+            submissions: a.submissions.map(s => {
+              // Always prefer the locally-resolved status — KV may still be syncing.
+              const local = localResolvedRef.current.get(s.id);
+              if (local) return { ...s, status: local };
+              return s;
+            }),
+          }));
+      });
+      setLastFetched(new Date());
     } catch (err) {
       console.error('Failed to fetch assignments:', err);
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   }, [userEmail]);
 
   useEffect(() => {
     fetchAssignments();
-    // Poll for new submissions every 10 seconds
-    const interval = setInterval(fetchAssignments, 10000);
+    // Silent background polling every 15s — localResolvedRef protects approved/rejected
+    // decisions from being overwritten, so this is safe and flicker-free.
+    const interval = setInterval(() => fetchAssignments(true), 15000);
     return () => clearInterval(interval);
   }, [fetchAssignments]);
 
@@ -67,6 +96,10 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showStudentsList, setShowStudentsList] = useState(false);
   const [selectedSubmission, setSelectedSubmission] = useState<{assignment: Assignment, submission: Submission} | null>(null);
+  const [selectedAssignmentDetail, setSelectedAssignmentDetail] = useState<Assignment | null>(null);
+  const [aiCheckModal, setAiCheckModal] = useState<{ assignment: Assignment; submission: Submission } | null>(null);
+  const [aiCheckResult, setAiCheckResult] = useState<AIHomeworkCheckResult | null>(null);
+  const [aiCheckLoading, setAiCheckLoading] = useState(false);
   const [avatar, setAvatar] = useState<string | null>(() => {
     try { return localStorage.getItem('rezoflow_teacher_avatar'); } catch { return null; }
   });
@@ -163,6 +196,31 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
   }, [subjects, userEmail]);
 
 
+
+  const handleAICheck = async (assignment: Assignment, submission: Submission) => {
+    if (!submission.screenshotUrl) return;
+    setAiCheckResult(null);
+    setAiCheckModal({ assignment, submission });
+    setAiCheckLoading(true);
+    try {
+      const result = await checkHomeworkWithAI(
+        assignment.title,
+        assignment.description ?? '',
+        submission.screenshotUrl
+      );
+      setAiCheckResult(result);
+    } catch {
+      setAiCheckResult({
+        isCorrect: false,
+        grade: 'Удовлетворительно',
+        summary: 'Не удалось проанализировать работу. Попробуйте ещё раз.',
+        issues: [],
+        suggestions: [],
+      });
+    } finally {
+      setAiCheckLoading(false);
+    }
+  };
 
   const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -358,7 +416,7 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
 
   const handleParseAI = async () => {
     if (!newAssignment.title && !uploadedImage) {
-      alert('Введите текст задания, запишите голос или загрузите изображение для распознавания.');
+      alert('Введите текст задания, запишите голос или загрузите изображе��ие для распознавания.');
       return;
     }
 
@@ -402,7 +460,7 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
     }
   };
 
-  const handleAddAssignment = async (e: React.FormEvent) => {
+  const handleAddAssignment = (e: React.FormEvent) => {
     e.preventDefault();
 
     let finalClasses = [...newAssignment.classes];
@@ -437,27 +495,27 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
     setShowAddForm(false);
     setAddMode('selection');
 
-    try {
-      const data = await apiRequest('/assignments', {
-        method: 'POST',
-        body: JSON.stringify({
-          title: newAssignment.title,
-          subject: newAssignment.subject,
-          assignedClass: finalClasses,
-          deadline: newAssignment.deadline,
-          description: newAssignment.description,
-          teacherEmail: userEmail,
-          teacherName: userName,
-        }),
-      });
-      // Replace optimistic entry with real one from server
-      setAssignments(prev => prev.map(a => a.id === tempId ? { ...data.assignment, submissions: [] } : a));
-    } catch (err) {
+    // Fire-and-forget: the optimistic entry already reflects the UI.
+    // We pass tempId as the assignment id so the server persists exactly
+    // the same id — no "replace optimistic with real" re-render needed.
+    apiRequest('/assignments', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: tempId,
+        title: newAssignment.title,
+        subject: newAssignment.subject,
+        assignedClass: finalClasses,
+        deadline: newAssignment.deadline,
+        description: newAssignment.description,
+        teacherEmail: userEmail,
+        teacherName: userName,
+      }),
+    }).catch((err) => {
       console.error('Failed to create assignment:', err);
-      // Remove optimistic entry on failure
+      // Roll back optimistic entry if the server rejected it
       setAssignments(prev => prev.filter(a => a.id !== tempId));
       alert('Ошибка при создании задания. Попробуйте снова.');
-    }
+    });
   };
 
   const handleDeleteAssignment = async (assignmentId: number) => {
@@ -465,17 +523,24 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
       return;
     }
 
+    // Mark as deleted immediately — polling will never restore it even if kvDel lags
+    localDeletedAssignmentIdsRef.current.add(assignmentId);
+    setAssignments(prev => prev.filter(a => a.id !== assignmentId));
+
     try {
       await apiRequest(`/assignments/${assignmentId}`, { method: 'DELETE' });
-      setAssignments(prev => prev.filter(a => a.id !== assignmentId));
     } catch (err) {
       console.error('Failed to delete assignment:', err);
+      // Roll back: remove the guard and re-fetch real state
+      localDeletedAssignmentIdsRef.current.delete(assignmentId);
+      fetchAssignments(true);
       alert('Ошибка пр�� удалении задания.');
     }
   };
 
   const handleApproveSubmission = async (assignmentId: number, submissionId: number) => {
-    // Optimistic update
+    // Record locally so refresh never reverts this decision.
+    localResolvedRef.current.set(submissionId, 'approved');
     setAssignments(prev => prev.map(assignment => {
       if (assignment.id === assignmentId) {
         return {
@@ -501,6 +566,8 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
   };
 
   const handleRejectSubmission = async (assignmentId: number, submissionId: number) => {
+    // Record locally so refresh never reverts this decision.
+    localResolvedRef.current.set(submissionId, 'rejected');
     setAssignments(prev => prev.map(assignment => {
       if (assignment.id === assignmentId) {
         return {
@@ -1376,7 +1443,16 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
                         className="relative bg-[#1A1A1A]/80 backdrop-blur-xl rounded-2xl p-6 border border-white/5 hover:border-primary/40 hover:shadow-[0_8px_30px_rgba(139,92,246,0.15)] transition-all duration-300 group overflow-hidden"
                       >
                         <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-                        <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/5 group-hover:ring-primary/20 pointer-events-none transition-all duration-500" />
+                        <button
+                          onClick={() => setSelectedAssignmentDetail(assignment)}
+                          className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/5 group-hover:ring-primary/20 transition-all duration-500 cursor-pointer z-0 focus:outline-none"
+                          aria-label="Открыть подробности задания"
+                        >
+                          <span className="absolute bottom-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity duration-300 px-2.5 py-1 bg-primary/20 border border-primary/30 rounded-lg text-[10px] font-semibold text-primary/90 flex items-center gap-1 pointer-events-none">
+                            <Eye className="w-3 h-3" />
+                            Подробнее
+                          </span>
+                        </button>
 
                         <div className="relative z-10 space-y-4">
                           <div className="flex justify-between items-start relative">
@@ -1447,15 +1523,32 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
                 {/* ── Pending submissions ── */}
                 {pendingSubmissionsCount > 0 && (
                   <div className="space-y-3">
-                    <div className="flex items-center gap-2">
-                      <motion.span
-                        animate={{ opacity: [1, 0.3, 1] }}
-                        transition={{ duration: 1.4, repeat: Infinity }}
-                        className="w-2 h-2 rounded-full bg-amber-400"
-                      />
-                      <h3 className="text-sm font-semibold text-white/70 uppercase tracking-wide">
-                        Ожидают проверки — {pendingSubmissionsCount}
-                      </h3>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <motion.span
+                          animate={{ opacity: [1, 0.3, 1] }}
+                          transition={{ duration: 1.4, repeat: Infinity }}
+                          className="w-2 h-2 rounded-full bg-amber-400"
+                        />
+                        <h3 className="text-sm font-semibold text-white/70 uppercase tracking-wide">
+                          Ожидают проверки — {pendingSubmissionsCount}
+                        </h3>
+                      </div>
+                      <button
+                        onClick={() => fetchAssignments(true)}
+                        disabled={isRefreshing}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white/50 hover:text-white/80 text-xs font-medium transition-all disabled:opacity-50"
+                        title="Обновить список работ"
+                      >
+                        <motion.span
+                          animate={isRefreshing ? { rotate: 360 } : { rotate: 0 }}
+                          transition={isRefreshing ? { duration: 0.8, repeat: Infinity, ease: 'linear' } : {}}
+                          className="inline-block"
+                        >
+                          ↻
+                        </motion.span>
+                        {isRefreshing ? 'Обновление…' : lastFetched ? `Обновлено в ${lastFetched.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` : 'Обновить'}
+                      </button>
                     </div>
                     <AnimatePresence mode="popLayout">
                       {assignments.flatMap(assignment =>
@@ -1504,11 +1597,18 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
                                     alt="Работа ученика"
                                     className="w-full max-h-64 object-contain group-hover/img:opacity-90 transition-opacity"
                                   />
-                                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition-opacity">
-                                    <div className="px-3 py-1.5 bg-black/60 backdrop-blur-sm rounded-xl text-white text-xs flex items-center gap-1.5">
+                                  <div className="absolute inset-0 flex items-center justify-center gap-2 opacity-0 group-hover/img:opacity-100 transition-opacity">
+                                    <div className="px-3 py-1.5 bg-black/60 backdrop-blur-sm rounded-xl text-white text-xs flex items-center gap-1.5 pointer-events-none">
                                       <Eye className="w-3.5 h-3.5" />
                                       Увеличить
                                     </div>
+                                    <button
+                                      onClick={e => { e.stopPropagation(); handleAICheck(assignment, submission); }}
+                                      className="px-3 py-1.5 bg-violet-600/85 backdrop-blur-sm rounded-xl text-white text-xs flex items-center gap-1.5 hover:bg-violet-500/90 transition-colors border border-violet-400/30 pointer-events-auto shadow-[0_0_12px_rgba(139,92,246,0.4)]"
+                                    >
+                                      <Sparkles className="w-3.5 h-3.5" />
+                                      ИИ-проверка
+                                    </button>
                                   </div>
                                 </div>
                               )}
@@ -1546,11 +1646,32 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
 
                 {/* Empty pending state */}
                 {pendingSubmissionsCount === 0 && (
-                  <div className="flex flex-col items-center justify-center py-10 gap-3 text-center">
+                  <div className="flex flex-col items-center justify-center py-10 gap-4 text-center">
                     <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
                       <CheckCircle className="w-7 h-7 text-emerald-400" />
                     </div>
-                    <p className="text-white/50 text-sm">Все работы проверены!</p>
+                    <div className="space-y-1">
+                      <p className="text-white/60 text-sm font-medium">Нет работ на проверке</p>
+                      <p className="text-white/30 text-xs">
+                        {lastFetched
+                          ? `Обновлено в ${lastFetched.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
+                          : 'Новые работы не подгружаются автоматически'}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => fetchAssignments(true)}
+                      disabled={isRefreshing}
+                      className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-white/50 hover:text-white/80 text-sm font-medium transition-all disabled:opacity-50"
+                    >
+                      <motion.span
+                        animate={isRefreshing ? { rotate: 360 } : { rotate: 0 }}
+                        transition={isRefreshing ? { duration: 0.8, repeat: Infinity, ease: 'linear' } : {}}
+                        className="inline-block text-base leading-none"
+                      >
+                        ↻
+                      </motion.span>
+                      {isRefreshing ? 'Проверяем…' : 'Проверить новые работы'}
+                    </button>
                   </div>
                 )}
 
@@ -1621,6 +1742,285 @@ export function TeacherDashboard({ userName, userEmail, isLightGradient, setIsLi
       <AnimatePresence>
         {showStudentsList && (
           <ClassStudentsModal onClose={() => setShowStudentsList(false)} />
+        )}
+      </AnimatePresence>
+
+      {/* ── Assignment Detail Modal ── */}
+      <AnimatePresence>
+        {selectedAssignmentDetail && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/75 backdrop-blur-md z-[75] flex items-center justify-center p-4"
+            onClick={() => setSelectedAssignmentDetail(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 24 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 24 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+              className="w-full max-w-lg bg-[#141414] rounded-3xl border border-primary/20 shadow-[0_0_80px_rgba(139,92,246,0.2)] overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-primary/5">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-1.5 bg-primary/20 rounded-xl border border-primary/25">
+                    <FileText className="w-4 h-4 text-primary" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-semibold text-white leading-snug">{selectedAssignmentDetail.title}</h2>
+                    <p className="text-white/40 text-xs">{selectedAssignmentDetail.subject}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedAssignmentDetail(null)}
+                  className="p-2 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 text-white/50 hover:text-white transition-all"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="px-6 py-5 space-y-4 max-h-[65vh] overflow-y-auto">
+                {/* Meta info */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/8">
+                    <p className="text-white/35 text-[10px] font-semibold uppercase tracking-wide mb-1">Класс</p>
+                    <p className="text-white/85 text-sm font-medium">
+                      {Array.isArray(selectedAssignmentDetail.class)
+                        ? selectedAssignmentDetail.class.join(', ')
+                        : selectedAssignmentDetail.class}
+                    </p>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/8">
+                    <p className="text-white/35 text-[10px] font-semibold uppercase tracking-wide mb-1">Дедлайн</p>
+                    <p className="text-white/85 text-sm font-medium flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-primary/70" />
+                      {selectedAssignmentDetail.deadline}
+                    </p>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/8">
+                    <p className="text-white/35 text-[10px] font-semibold uppercase tracking-wide mb-1">Учеников</p>
+                    <p className="text-white/85 text-sm font-medium flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-primary/70" />
+                      {selectedAssignmentDetail.studentsCount > 0 ? selectedAssignmentDetail.studentsCount : '—'}
+                    </p>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/8">
+                    <p className="text-white/35 text-[10px] font-semibold uppercase tracking-wide mb-1">На проверке</p>
+                    <p className="text-sm font-medium flex items-center gap-1.5">
+                      {(() => {
+                        const pending = selectedAssignmentDetail.submissions.filter(s => s.status === 'pending').length;
+                        return pending > 0
+                          ? <><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /><span className="text-amber-400">{pending} работ</span></>
+                          : <><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" /><span className="text-emerald-400">Все проверены</span></>;
+                      })()}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Description */}
+                {selectedAssignmentDetail.description ? (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-primary/80 uppercase tracking-wide px-0.5">Описание задания</p>
+                    <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/8">
+                      <p className="text-white/70 text-sm leading-relaxed whitespace-pre-wrap">
+                        {selectedAssignmentDetail.description}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/8 text-center">
+                    <p className="text-white/30 text-sm italic">Описание не указано</p>
+                  </div>
+                )}
+
+                {/* Submissions summary */}
+                {selectedAssignmentDetail.submissions.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-white/40 uppercase tracking-wide px-0.5">Сдавшие ученики</p>
+                    <div className="space-y-1.5">
+                      {selectedAssignmentDetail.submissions.map(sub => (
+                        <div key={sub.id} className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.025] border border-white/6">
+                          <div className="w-7 h-7 rounded-lg bg-primary/15 border border-primary/20 flex items-center justify-center shrink-0">
+                            <User className="w-3.5 h-3.5 text-primary" />
+                          </div>
+                          <span className="flex-1 text-white/80 text-sm font-medium">{sub.studentName}</span>
+                          <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
+                            sub.status === 'approved'
+                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                              : sub.status === 'rejected'
+                              ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                              : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                          }`}>
+                            {sub.status === 'approved' ? 'Принято' : sub.status === 'rejected' ? 'Отклонено' : 'Ожидание'}
+                          </span>
+                          <span className="text-primary/70 text-xs font-semibold">+{sub.xp} XP</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="px-6 py-4 border-t border-white/5 flex justify-end">
+                <button
+                  onClick={() => setSelectedAssignmentDetail(null)}
+                  className="px-5 py-2.5 bg-primary/15 hover:bg-primary/25 text-primary rounded-xl border border-primary/25 text-sm font-semibold transition-all"
+                >
+                  Закрыть
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── AI Homework Check Modal ── */}
+      <AnimatePresence>
+        {aiCheckModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/75 backdrop-blur-md z-[80] flex items-center justify-center p-4"
+            onClick={() => { setAiCheckModal(null); setAiCheckResult(null); }}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 24 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 24 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+              className="w-full max-w-lg bg-[#141414] rounded-3xl border border-violet-500/20 shadow-[0_0_80px_rgba(139,92,246,0.2)] overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-violet-500/5">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-1.5 bg-violet-500/20 rounded-xl border border-violet-500/25">
+                    <Sparkles className="w-4 h-4 text-violet-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-semibold text-white">ИИ-проверка работы</h2>
+                    <p className="text-white/40 text-xs truncate max-w-[260px]">{aiCheckModal.assignment.title} · {aiCheckModal.submission.studentName}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => { setAiCheckModal(null); setAiCheckResult(null); }}
+                  className="p-2 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 text-white/50 hover:text-white transition-all"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Preview image */}
+              {aiCheckModal.submission.screenshotUrl && (
+                <div className="px-6 pt-4">
+                  <img
+                    src={aiCheckModal.submission.screenshotUrl}
+                    alt="Работа ученика"
+                    className="w-full max-h-48 object-contain rounded-2xl border border-white/8 bg-black/30"
+                  />
+                </div>
+              )}
+
+              {/* Body */}
+              <div className="px-6 py-5 space-y-4 max-h-[50vh] overflow-y-auto">
+                {aiCheckLoading && (
+                  <div className="flex flex-col items-center justify-center py-10 gap-3">
+                    <motion.div
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
+                      className="w-10 h-10 rounded-full border-2 border-violet-500/30 border-t-violet-400"
+                    />
+                    <p className="text-white/50 text-sm">Нейросеть анализирует работу…</p>
+                  </div>
+                )}
+
+                {!aiCheckLoading && aiCheckResult && (() => {
+                  const gradeColors: Record<string, string> = {
+                    'Отлично':          'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
+                    'Хорошо':           'bg-blue-500/15 text-blue-400 border-blue-500/25',
+                    'Удовлетворительно':'bg-amber-500/15 text-amber-400 border-amber-500/25',
+                    'Неверно':          'bg-red-500/15 text-red-400 border-red-500/25',
+                  };
+                  const gradeColor = gradeColors[aiCheckResult.grade] ?? gradeColors['Удовлетворительно'];
+                  return (
+                    <div className="space-y-4">
+                      {/* Grade badge */}
+                      <div className="flex items-center gap-3">
+                        <span className={`px-3 py-1.5 rounded-xl text-sm font-bold border ${gradeColor}`}>
+                          {aiCheckResult.grade}
+                        </span>
+                        <span className={`text-sm font-medium ${aiCheckResult.isCorrect ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {aiCheckResult.isCorrect ? '✓ Верно выполнено' : '✗ Есть ошибки'}
+                        </span>
+                      </div>
+
+                      {/* Summary */}
+                      <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/8">
+                        <p className="text-white/75 text-sm leading-relaxed">{aiCheckResult.summary}</p>
+                      </div>
+
+                      {/* Issues */}
+                      {aiCheckResult.issues.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-xs font-semibold text-red-400 uppercase tracking-wide px-0.5">Ошибки и недочёты</p>
+                          <div className="space-y-1.5">
+                            {aiCheckResult.issues.map((issue, i) => (
+                              <div key={i} className="flex items-start gap-2.5 p-3 rounded-xl bg-red-500/[0.06] border border-red-500/15">
+                                <XCircle className="w-3.5 h-3.5 text-red-400 mt-0.5 shrink-0" />
+                                <p className="text-white/70 text-xs leading-relaxed">{issue}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Suggestions */}
+                      {aiCheckResult.suggestions.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-xs font-semibold text-violet-400 uppercase tracking-wide px-0.5">Рекомендации</p>
+                          <div className="space-y-1.5">
+                            {aiCheckResult.suggestions.map((s, i) => (
+                              <div key={i} className="flex items-start gap-2.5 p-3 rounded-xl bg-violet-500/[0.06] border border-violet-500/15">
+                                <Sparkles className="w-3.5 h-3.5 text-violet-400 mt-0.5 shrink-0" />
+                                <p className="text-white/70 text-xs leading-relaxed">{s}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Footer actions */}
+              {!aiCheckLoading && aiCheckResult && (
+                <div className="flex gap-0 border-t border-white/5">
+                  <button
+                    onClick={() => { setAiCheckModal(null); setAiCheckResult(null); }}
+                    className="flex-1 py-3.5 text-white/50 hover:text-white/80 text-sm font-medium transition-colors border-r border-white/5"
+                  >
+                    Закрыть
+                  </button>
+                  <button
+                    onClick={() => {
+                      handleAICheck(aiCheckModal.assignment, aiCheckModal.submission);
+                    }}
+                    className="flex-1 flex items-center justify-center gap-2 py-3.5 text-violet-400 hover:text-violet-300 text-sm font-medium transition-colors"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Проверить снова
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

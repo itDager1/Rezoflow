@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RezoFlow — Design Export</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0D0D0D;
+      color: #E8E8E8;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* ============ LAYOUT SECTIONS ============ */
+    .section {
+      padding: 80px 40px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: rgba(255, 255, 255, 0.4);
+      margin-bottom: 40px;
+      text-align: center;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    /* ============ TASK CARDS ============ */
+    .task-cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+      gap: 24px;
+      margin-bottom: 60px;
+    }
+
+    .task-card {
+      position: relative;
+      background: rgba(26, 26, 26, 0.8);
+      backdrop-filter: blur(40px);
+      border-radius: 16px;
+      padding: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      transition: all 0.3s ease;
+      overflow: hidden;
+    }
+
+    .task-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(139, 92, 246, 0.05) 0%, transparent 50%, transparent 100%);
+      opacity: 0;
+      transition: opacity 0.5s ease;
+      pointer-events: none;
+    }
+
+    .task-card:hover::before {
+      opacity: 1;
+    }
+
+    .task-card::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      pointer-events: none;
+      transition: border-color 0.5s ease;
+    }
+
+    .task-card:hover::after {
+      border-color: rgba(139, 92, 246, 0.2);
+    }
+
+    /* Teacher task — purple accent */
+    .task-card.teacher-task .accent-stripe {
+      background: rgba(139, 92, 246, 0.6);
+    }
+
+    .task-card.teacher-task:hover {
+      box-shadow: 0 8px 30px rgba(139, 92, 246, 0.18);
+    }
+
+    /* Student task — teal accent */
+    .task-card.student-task .accent-stripe {
+      background: rgba(20, 184, 166, 0.6);
+    }
+
+    .task-card.student-task:hover {
+      box-shadow: 0 8px 30px rgba(20, 184, 166, 0.18);
+    }
+
+    .accent-stripe {
+      position: absolute;
+      left: 0;
+      top: 16px;
+      bottom: 16px;
+      width: 3px;
+      border-radius: 0 999px 999px 0;
+      opacity: 0.7;
+      transition: opacity 0.3s ease;
+    }
+
+    .task-card:hover .accent-stripe {
+      opacity: 1;
+    }
+
+    .task-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.9);
+      margin-bottom: 8px;
+      padding-left: 4px;
+      transition: color 0.3s ease;
+    }
+
+    .task-card.teacher-task:hover .task-title {
+      color: #8B5CF6;
+    }
+
+    .task-card.student-task:hover .task-title {
+      color: #14B8A6;
+    }
+
+    .task-description {
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 14px;
+      font-weight: 300;
+      margin-bottom: 16px;
+      padding-left: 4px;
+      line-height: 1.6;
+    }
+
+    .task-badges {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .badge {
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      border: 1px solid;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .badge-subject {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .badge-easy {
+      background: rgba(34, 197, 94, 0.1);
+      border-color: rgba(34, 197, 94, 0.2);
+      color: #4ADE80;
+      box-shadow: 0 0 10px rgba(34, 197, 94, 0.1);
+    }
+
+    .badge-medium {
+      background: rgba(234, 179, 8, 0.1);
+      border-color: rgba(234, 179, 8, 0.2);
+      color: #FACC15;
+      box-shadow: 0 0 10px rgba(234, 179, 8, 0.1);
+    }
+
+    .badge-hard {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.2);
+      color: #F87171;
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.1);
+    }
+
+    .badge-xp {
+      background: rgba(234, 179, 8, 0.1);
+      border-color: rgba(234, 179, 8, 0.2);
+      color: #FACC15;
+      box-shadow: 0 0 10px rgba(139, 92, 246, 0.1);
+    }
+
+    .badge-personal {
+      background: rgba(20, 184, 166, 0.1);
+      border-color: rgba(20, 184, 166, 0.2);
+      color: #14B8A6;
+      box-shadow: 0 0 10px rgba(20, 184, 166, 0.1);
+    }
+
+    .task-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .task-meta {
+      display: flex;
+      gap: 20px;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.4);
+    }
+
+    .btn-complete {
+      padding: 6px 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid transparent;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.6);
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .task-card.teacher-task .btn-complete:hover {
+      background: rgba(139, 92, 246, 0.1);
+      border-color: rgba(139, 92, 246, 0.2);
+      color: #8B5CF6;
+    }
+
+    .task-card.student-task .btn-complete:hover {
+      background: rgba(20, 184, 166, 0.1);
+      border-color: rgba(20, 184, 166, 0.2);
+      color: #14B8A6;
+    }
+
+    /* ============ REGISTER FORM ============ */
+    .register-section {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+
+    .register-glow-1 {
+      position: absolute;
+      top: -10%;
+      left: -10%;
+      width: 600px;
+      height: 600px;
+      background: radial-gradient(circle, rgba(139, 92, 246, 0.25) 0%, rgba(167, 139, 250, 0.15) 30%, transparent 70%);
+      filter: blur(150px);
+      pointer-events: none;
+    }
+
+    .register-glow-2 {
+      position: absolute;
+      bottom: -10%;
+      right: -10%;
+      width: 600px;
+      height: 600px;
+      background: radial-gradient(circle, rgba(109, 40, 217, 0.15) 0%, transparent 70%);
+      filter: blur(150px);
+      pointer-events: none;
+    }
+
+    .register-form-wrapper {
+      width: 100%;
+      max-width: 480px;
+      position: relative;
+      z-index: 10;
+    }
+
+    .register-header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    .register-logo {
+      width: 80px;
+      height: 80px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      box-shadow: 0 0 40px rgba(139, 92, 246, 0.3);
+    }
+
+    .register-logo svg {
+      width: 40px;
+      height: 40px;
+      color: #8B5CF6;
+      filter: drop-shadow(0 0 15px rgba(139, 92, 246, 0.5));
+    }
+
+    .register-title {
+      font-size: 36px;
+      font-weight: 600;
+      background: linear-gradient(90deg, #fff 0%, rgba(255, 255, 255, 0.9) 50%, rgba(255, 255, 255, 0.6) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 12px;
+    }
+
+    .register-subtitle {
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 14px;
+    }
+
+    .register-form {
+      background: rgba(20, 20, 20, 0.8);
+      backdrop-filter: blur(60px);
+      border-radius: 24px;
+      padding: 32px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .register-form::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 50%);
+      border-radius: 24px;
+      pointer-events: none;
+    }
+
+    .role-selector {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .role-card {
+      padding: 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(255, 255, 255, 0.05);
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      position: relative;
+    }
+
+    .role-card:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .role-card.active {
+      background: rgba(139, 92, 246, 0.1);
+      border-color: #8B5CF6;
+      box-shadow: 0 0 30px rgba(139, 92, 246, 0.2);
+    }
+
+    .role-card.active::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border: 2px solid #8B5CF6;
+      border-radius: 16px;
+      pointer-events: none;
+    }
+
+    .role-icon {
+      width: 32px;
+      height: 32px;
+      margin: 0 auto 8px;
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .role-card.active .role-icon {
+      color: #8B5CF6;
+      filter: drop-shadow(0 0 10px rgba(139, 92, 246, 0.8));
+    }
+
+    .role-label {
+      font-size: 14px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.7);
+      margin-bottom: 4px;
+    }
+
+    .role-card.active .role-label {
+      color: #fff;
+    }
+
+    .role-desc {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.4);
+    }
+
+    .class-selector {
+      margin-top: 24px;
+      padding-top: 24px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .class-selector-title {
+      text-align: center;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: rgba(255, 255, 255, 0.4);
+      margin-bottom: 16px;
+    }
+
+    .class-grid {
+      display: grid;
+      grid-template-columns: repeat(11, 1fr);
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .class-btn {
+      padding: 10px 0;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.6);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .class-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .class-btn.active {
+      background: rgba(139, 92, 246, 0.2);
+      border-color: #8B5CF6;
+      color: #8B5CF6;
+      box-shadow: 0 0 15px rgba(139, 92, 246, 0.3);
+    }
+
+    .letter-grid {
+      display: grid;
+      grid-template-columns: repeat(9, 1fr);
+      gap: 8px;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.6);
+      margin-bottom: 6px;
+      margin-left: 4px;
+    }
+
+    .input-wrapper {
+      position: relative;
+    }
+
+    .input-icon {
+      position: absolute;
+      left: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 20px;
+      height: 20px;
+      color: rgba(255, 255, 255, 0.4);
+      transition: color 0.3s ease;
+    }
+
+    .input-wrapper:focus-within .input-icon {
+      color: #8B5CF6;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 14px 16px 14px 48px;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      color: #fff;
+      font-size: 16px;
+      transition: all 0.3s ease;
+    }
+
+    .form-input::placeholder {
+      color: rgba(255, 255, 255, 0.2);
+    }
+
+    .form-input:focus {
+      outline: none;
+      border-color: #8B5CF6;
+      box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.5);
+    }
+
+    .btn-submit {
+      width: 100%;
+      padding: 16px;
+      background: linear-gradient(90deg, #8B5CF6 0%, #7C3AED 100%);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 500;
+      cursor: pointer;
+      box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+      transition: all 0.3s ease;
+      margin-top: 24px;
+    }
+
+    .btn-submit:hover {
+      box-shadow: 0 0 30px rgba(139, 92, 246, 0.6);
+      transform: translateY(-1px);
+    }
+
+    /* ============ AI CHAT WIDGET ============ */
+    .ai-widget-fab {
+      position: fixed;
+      bottom: 32px;
+      right: 32px;
+      width: 64px;
+      height: 64px;
+      background: linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%);
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      z-index: 1000;
+    }
+
+    .ai-widget-fab:hover {
+      box-shadow: 0 0 30px rgba(139, 92, 246, 0.6);
+      transform: scale(1.05);
+    }
+
+    .ai-widget-fab svg {
+      width: 32px;
+      height: 32px;
+      color: #fff;
+      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
+    }
+
+    .ai-chat-window {
+      position: fixed;
+      bottom: 32px;
+      right: 32px;
+      width: 400px;
+      height: 600px;
+      background: rgba(10, 10, 14, 0.95);
+      backdrop-filter: blur(40px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 24px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 1001;
+    }
+
+    .ai-chat-header {
+      padding: 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .ai-chat-header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .ai-chat-avatar {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 15px rgba(139, 92, 246, 0.3);
+    }
+
+    .ai-chat-avatar svg {
+      width: 20px;
+      height: 20px;
+      color: #fff;
+    }
+
+    .ai-chat-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .ai-chat-messages {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .ai-message {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+
+    .ai-message.user {
+      flex-direction: row-reverse;
+    }
+
+    .ai-message-bubble {
+      max-width: 75%;
+      padding: 12px 16px;
+      border-radius: 16px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .ai-message.assistant .ai-message-bubble {
+      background: rgba(139, 92, 246, 0.15);
+      border: 1px solid rgba(139, 92, 246, 0.2);
+      color: #fff;
+    }
+
+    .ai-message.user .ai-message-bubble {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #fff;
+    }
+
+    .ai-chat-input-wrapper {
+      padding: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .ai-chat-input {
+      width: 100%;
+      padding: 12px 48px 12px 16px;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      color: #fff;
+      font-size: 14px;
+      resize: none;
+    }
+
+    .ai-chat-input:focus {
+      outline: none;
+      border-color: #8B5CF6;
+    }
+
+    /* ============ DASHBOARD CARDS ============ */
+    .dashboard-header {
+      margin-bottom: 40px;
+    }
+
+    .dashboard-welcome {
+      font-size: 32px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    .dashboard-subtitle {
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 16px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+
+    .stat-card {
+      background: rgba(26, 26, 26, 0.8);
+      backdrop-filter: blur(40px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      padding: 24px;
+      transition: all 0.3s ease;
+    }
+
+    .stat-card:hover {
+      border-color: rgba(139, 92, 246, 0.3);
+      box-shadow: 0 8px 30px rgba(139, 92, 246, 0.15);
+    }
+
+    .stat-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-bottom: 8px;
+    }
+
+    .stat-value {
+      font-size: 36px;
+      font-weight: 700;
+      color: #8B5CF6;
+      text-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+    }
+
+    .stat-description {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.4);
+      margin-top: 8px;
+    }
+
+    /* ============ ICONS (SVG) ============ */
+    .icon {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ============ SECTION: DASHBOARD ============ -->
+  <div class="section">
+    <div class="container">
+      <div class="dashboard-header">
+        <h2 class="dashboard-welcome">Привет, Алексей! 👋</h2>
+        <p class="dashboard-subtitle">У тебя 3 активных задания и 250 XP</p>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Активные задания</div>
+          <div class="stat-value">3</div>
+          <div class="stat-description">2 от учителя, 1 личное</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">Опыт (XP)</div>
+          <div class="stat-value">250</div>
+          <div class="stat-description">+20 XP за последнее задание</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">Выполнено</div>
+          <div class="stat-value">12</div>
+          <div class="stat-description">На этой неделе</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">Рейтинг</div>
+          <div class="stat-value">#5</div>
+          <div class="stat-description">В классе 5А</div>
+        </div>
+      </div>
+
+      <!-- Task Cards -->
+      <div class="task-cards-grid" style="margin-top: 40px;">
+
+        <!-- Teacher Task Card -->
+        <div class="task-card teacher-task">
+          <div class="accent-stripe"></div>
+          <h3 class="task-title">Решить задачи по алгебре</h3>
+          <p class="task-description">Выполните задания из учебника: стр. 45, упражнения 1-5. Запишите решение в тетрадь с подробным пояснением каждого шага.</p>
+          <div class="task-badges">
+            <span class="badge badge-subject">Математика</span>
+            <span class="badge badge-medium">Средне</span>
+            <span class="badge badge-xp">+20 XP после проверки</span>
+          </div>
+          <div class="task-footer">
+            <div class="task-meta">
+              <span>📅 15 мая 2026</span>
+              <span>📄 60 минут</span>
+            </div>
+            <button class="btn-complete">✓ Выполнено</button>
+          </div>
+        </div>
+
+        <!-- Student Task Card -->
+        <div class="task-card student-task">
+          <div class="accent-stripe"></div>
+          <h3 class="task-title">Прочитать главу книги</h3>
+          <p class="task-description">Закончить чтение второй главы романа "Война и мир" и записать краткие заметки для обсуждения в классе.</p>
+          <div class="task-badges">
+            <span class="badge badge-subject">Литература</span>
+            <span class="badge badge-easy">Легко</span>
+            <span class="badge badge-personal">📚 Личное задание</span>
+          </div>
+          <div class="task-footer">
+            <div class="task-meta">
+              <span>📅 12 мая 2026</span>
+              <span>📄 Задание</span>
+            </div>
+            <button class="btn-complete">✓ Выполнено</button>
+          </div>
+        </div>
+
+        <!-- Teacher Task Card (Hard) -->
+        <div class="task-card teacher-task">
+          <div class="accent-stripe"></div>
+          <div style="position: absolute; top: 20px; right: 20px;">
+            <svg class="icon" style="width: 20px; height: 20px; color: #FACC15; fill: #FACC15; filter: drop-shadow(0 0 8px rgba(250, 204, 21, 0.8));" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+          </div>
+          <h3 class="task-title">Проект по физике</h3>
+          <p class="task-description">Создайте презентацию о законах Ньютона с примерами из повседневной жизни. Подготовьте доклад на 5-7 минут.</p>
+          <div class="task-badges">
+            <span class="badge badge-subject">Физика</span>
+            <span class="badge badge-hard">Сложно</span>
+            <span class="badge badge-xp">+50 XP после проверки</span>
+          </div>
+          <div class="task-footer">
+            <div class="task-meta">
+              <span>📅 20 мая 2026</span>
+              <span>📄 180 минут</span>
+            </div>
+            <button class="btn-complete">✓ Выполнено</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ SECTION: REGISTER FORM ============ -->
+  <div class="section register-section">
+    <div class="register-glow-1"></div>
+    <div class="register-glow-2"></div>
+
+    <div class="register-form-wrapper">
+      <div class="register-header">
+        <div class="register-logo">
+          <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 10v6M2 10l10-5 10 5-10 5z"/>
+            <path d="M6 12v5c3 3 9 3 12 0v-5"/>
+          </svg>
+        </div>
+        <h1 class="register-title">Создать аккаунт</h1>
+        <p class="register-subtitle">Присоединяйтесь к платформе нового поколения</p>
+      </div>
+
+      <div class="register-form">
+        <!-- Role Selector -->
+        <div class="role-selector">
+          <div class="role-card active">
+            <svg class="role-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 10v6M2 10l10-5 10 5-10 5z"/>
+              <path d="M6 12v5c3 3 9 3 12 0v-5"/>
+            </svg>
+            <div class="role-label">Школьник</div>
+            <div class="role-desc">Я учусь</div>
+          </div>
+
+          <div class="role-card">
+            <svg class="role-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            </svg>
+            <div class="role-label">Учитель</div>
+            <div class="role-desc">Я преподаю</div>
+          </div>
+
+          <div class="role-card">
+            <svg class="role-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+            <div class="role-label">Родитель</div>
+            <div class="role-desc">Я помогаю</div>
+          </div>
+        </div>
+
+        <!-- Class Selector -->
+        <div class="class-selector">
+          <div class="class-selector-title">Выберите класс</div>
+
+          <div style="margin-bottom: 16px;">
+            <label class="form-label">Номер класса</label>
+            <div class="class-grid">
+              <button class="class-btn">1</button>
+              <button class="class-btn">2</button>
+              <button class="class-btn">3</button>
+              <button class="class-btn">4</button>
+              <button class="class-btn active">5</button>
+              <button class="class-btn">6</button>
+              <button class="class-btn">7</button>
+              <button class="class-btn">8</button>
+              <button class="class-btn">9</button>
+              <button class="class-btn">10</button>
+              <button class="class-btn">11</button>
+            </div>
+          </div>
+
+          <div>
+            <label class="form-label">Буква класса</label>
+            <div class="letter-grid">
+              <button class="class-btn active">А</button>
+              <button class="class-btn">Б</button>
+              <button class="class-btn">В</button>
+              <button class="class-btn">Г</button>
+              <button class="class-btn">Д</button>
+              <button class="class-btn">Е</button>
+              <button class="class-btn">Ж</button>
+              <button class="class-btn">З</button>
+              <button class="class-btn">И</button>
+            </div>
+          </div>
+
+          <div style="text-align: center; padding: 12px 0; border-top: 1px solid rgba(255, 255, 255, 0.06); margin-top: 16px;">
+            <span style="font-size: 11px; color: rgba(255, 255, 255, 0.25); font-weight: 500; margin-right: 8px;">Выбран класс</span>
+            <span style="font-size: 20px; font-weight: 700; color: #8B5CF6; text-shadow: 0 0 18px rgba(139, 92, 246, 0.65);">5А</span>
+          </div>
+        </div>
+
+        <!-- Form Fields -->
+        <div class="form-group" style="margin-top: 24px;">
+          <label class="form-label">Имя</label>
+          <div class="input-wrapper">
+            <svg class="input-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+            <input type="text" class="form-input" placeholder="Ваше имя" value="Алексей Иванов">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Email</label>
+          <div class="input-wrapper">
+            <svg class="input-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="4" width="20" height="16" rx="2"/>
+              <path d="m2 7 10 7 10-7"/>
+            </svg>
+            <input type="email" class="form-input" placeholder="your@email.com" value="alexey@example.com">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Пароль</label>
+          <div class="input-wrapper">
+            <svg class="input-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            <input type="password" class="form-input" placeholder="••••••••" value="password123">
+          </div>
+        </div>
+
+        <button class="btn-submit">Создать аккаунт</button>
+
+        <p style="text-align: center; font-size: 14px; color: rgba(255, 255, 255, 0.4); margin-top: 24px;">
+          Уже есть аккаунт? <a href="#" style="color: #8B5CF6; text-decoration: none; font-weight: 500;">Войти</a>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ADDITIONAL COMPONENTS SECTION ============ -->
+  <div class="section">
+    <div class="section-title">Дополнительные компоненты</div>
+    <div class="container">
+      <p style="text-align: center; color: rgba(255, 255, 255, 0.3); font-size: 14px;">Ниже представлены дополнительные UI-элементы для импорта</p>
+    </div>
+  </div>
+
+  <!-- ============ AI CHAT WIDGET ============ -->
+  <div class="ai-widget-fab">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+      <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+      <circle cx="12" cy="15" r="1"/>
+    </svg>
+  </div>
+
+  <!-- AI Chat Window (Hidden by default, shown for export) -->
+  <div class="ai-chat-window" style="display: flex;">
+    <div class="ai-chat-header">
+      <div class="ai-chat-header-left">
+        <div class="ai-chat-avatar">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+          </svg>
+        </div>
+        <div class="ai-chat-title">ИИ-наставник</div>
+      </div>
+      <div>
+        <button style="background: none; border: none; color: rgba(255, 255, 255, 0.5); cursor: pointer; font-size: 11px; padding: 6px 8px; border-radius: 999px;">Очистить</button>
+      </div>
+    </div>
+
+    <div class="ai-chat-messages">
+      <div class="ai-message assistant">
+        <div class="ai-message-bubble">
+          Привет! Я ИИ-наставник RezoFlow. Я могу помочь тебе составить оптимальное расписание или разобраться с трудной темой. Напиши, с чем нужна помощь!
+        </div>
+      </div>
+
+      <div class="ai-message user">
+        <div class="ai-message-bubble">
+          Помоги мне составить расписание на сегодня
+        </div>
+      </div>
+
+      <div class="ai-message assistant">
+        <div class="ai-message-bubble">
+          Конечно! Давай посмотрим на твои задания. У тебя есть три активных задачи. Предлагаю начать с математики (средняя сложность, 60 минут), затем литературу (легко), а проект по физике оставить на выходные. Согласен?
+        </div>
+      </div>
+    </div>
+
+    <div class="ai-chat-input-wrapper">
+      <textarea class="ai-chat-input" placeholder="Напишите сообщение..." rows="2"></textarea>
+    </div>
+  </div>
+
+</body>
+</html>

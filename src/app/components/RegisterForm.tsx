@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Mail, Lock, User, GraduationCap, BookOpen, Users, Loader2 } from 'lucide-react';
+import { DrumRollPicker } from './DrumRollPicker';
 import { motion, AnimatePresence } from 'motion/react';
 import { apiRequest } from '../utils/api';
 
@@ -176,49 +177,68 @@ export function RegisterForm({ onRegister }: RegisterFormProps) {
                         animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
                         transition={{ duration: 0.3 }}
-                        className="space-y-4 pt-4"
+                        className="pt-4"
                       >
-                        <div className="space-y-2">
-                          <label className="text-xs font-medium text-white/60 ml-1">Номер класса</label>
-                          <div className="grid grid-cols-11 gap-2">
-                            {Array.from({ length: 11 }, (_, i) => i + 1).map((grade) => (
-                              <motion.button
-                                key={grade}
-                                type="button"
-                                whileHover={{ scale: 1.05 }}
-                                whileTap={{ scale: 0.95 }}
-                                onClick={() => setSelectedGrade(grade)}
-                                className={`py-2.5 rounded-lg border transition-all duration-200 text-sm font-medium ${
-                                  selectedGrade === grade
-                                    ? 'border-primary bg-primary/20 text-primary shadow-[0_0_15px_rgba(139,92,246,0.3)]'
-                                    : 'border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10'
-                                }`}
-                              >
-                                {grade}
-                              </motion.button>
-                            ))}
+                        {/* Preview label */}
+                        <p className="text-center text-xs text-white/40 mb-3 uppercase tracking-widest font-medium select-none">
+                          Выберите класс
+                        </p>
+
+                        {/* Drum roll pickers */}
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <label className="text-xs font-medium text-white/60 ml-1">Номер класса</label>
+                            <div className="grid grid-cols-11 gap-2">
+                              {Array.from({ length: 11 }, (_, i) => i + 1).map((grade) => (
+                                <motion.button
+                                  key={grade}
+                                  type="button"
+                                  whileHover={{ scale: 1.05 }}
+                                  whileTap={{ scale: 0.95 }}
+                                  onClick={() => setSelectedGrade(grade)}
+                                  className={`py-2.5 rounded-lg border transition-all duration-200 text-sm font-medium ${
+                                    selectedGrade === grade
+                                      ? 'border-primary bg-primary/20 text-primary shadow-[0_0_15px_rgba(139,92,246,0.3)]'
+                                      : 'border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10'
+                                  }`}
+                                >
+                                  {grade}
+                                </motion.button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-medium text-white/60 ml-1">Буква класса</label>
+                            <div className="grid grid-cols-9 gap-2">
+                              {['А','Б','В','Г','Д','Е','Ж','З','И','К','Л','М','Н','О','П','Р','С','Т','У','Ф','Х','Ц','Ш','Щ','Э','Ю','Я'].map((letter) => (
+                                <motion.button
+                                  key={letter}
+                                  type="button"
+                                  whileHover={{ scale: 1.05 }}
+                                  whileTap={{ scale: 0.95 }}
+                                  onClick={() => setSelectedLetter(letter)}
+                                  className={`py-2.5 rounded-lg border transition-all duration-200 text-sm font-medium ${
+                                    selectedLetter === letter
+                                      ? 'border-primary bg-primary/20 text-primary shadow-[0_0_15px_rgba(139,92,246,0.3)]'
+                                      : 'border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10'
+                                  }`}
+                                >
+                                  {letter}
+                                </motion.button>
+                              ))}
+                            </div>
                           </div>
                         </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-medium text-white/60 ml-1">Буква класса</label>
-                          <div className="grid grid-cols-6 gap-2">
-                            {['А', 'Б', 'В', 'Г', 'Д', 'Е'].map((letter) => (
-                              <motion.button
-                                key={letter}
-                                type="button"
-                                whileHover={{ scale: 1.05 }}
-                                whileTap={{ scale: 0.95 }}
-                                onClick={() => setSelectedLetter(letter)}
-                                className={`py-2.5 rounded-lg border transition-all duration-200 text-sm font-medium ${
-                                  selectedLetter === letter
-                                    ? 'border-primary bg-primary/20 text-primary shadow-[0_0_15px_rgba(139,92,246,0.3)]'
-                                    : 'border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10'
-                                }`}
-                              >
-                                {letter}
-                              </motion.button>
-                            ))}
-                          </div>
+
+                        {/* Preview footer */}
+                        <div className="flex items-center justify-center gap-2 py-3 border-t border-white/6">
+                          <span className="text-[11px] text-white/25 font-medium select-none">Выбран класс</span>
+                          <span
+                            className="font-bold text-xl text-primary select-none"
+                            style={{ textShadow: '0 0 18px rgba(139,92,246,0.65)' }}
+                          >
+                            {selectedGrade}{selectedLetter}
+                          </span>
                         </div>
                       </motion.div>
                     )}

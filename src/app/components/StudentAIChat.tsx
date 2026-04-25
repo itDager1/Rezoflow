@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Bot, User, X, Loader2, Sparkles, BookOpen, Clock } from 'lucide-react';
+import { Send, Bot, User, X, Loader2, BookOpen, Clock, ImageIcon } from 'lucide-react';
 import { chatWithAI, ChatMessage } from '../utils/ai';
 
 interface StudentAIChatProps {
@@ -22,7 +22,10 @@ export function StudentAIChat({ onClose, isLightGradient = false }: StudentAICha
   });
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [pastedImage, setPastedImage] = useState<string | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatWindowRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     localStorage.setItem('rezoflow_ai_chat', JSON.stringify(messages));
@@ -34,14 +37,38 @@ export function StudentAIChat({ onClose, isLightGradient = false }: StudentAICha
     }
   }, [messages, isLoading, isOpen]);
 
+  // Capture Ctrl+V paste anywhere inside the chat window
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith('image/')) {
+        const file = items[i].getAsFile();
+        if (!file) continue;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          setPastedImage(ev.target?.result as string);
+        };
+        reader.readAsDataURL(file);
+        e.preventDefault();
+        break;
+      }
+    }
+  };
+
   const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!input.trim() || isLoading) return;
+    if ((!input.trim() && !pastedImage) || isLoading) return;
 
-    const userMessage: ChatMessage = { role: 'user', content: input.trim() };
+    const userMessage: ChatMessage = {
+      role: 'user',
+      content: input.trim() || (pastedImage ? 'Посмотри на этот скриншот.' : ''),
+      ...(pastedImage ? { image: pastedImage } : {}),
+    };
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
     setInput('');
+    setPastedImage(null);
     setIsLoading(true);
 
     try {
@@ -80,11 +107,13 @@ export function StudentAIChat({ onClose, isLightGradient = false }: StudentAICha
 
       <AnimatePresence>
         {isOpen && (
-          <motion.div 
+          <motion.div
+            ref={chatWindowRef}
             key="chat-window"
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            onPaste={handlePaste}
             className="fixed bottom-6 right-6 md:bottom-8 md:right-8 z-50 w-[calc(100vw-3rem)] sm:w-[400px] h-[500px] md:h-[600px] max-h-[80vh] flex flex-col rounded-3xl border shadow-2xl overflow-hidden bg-[#0a0a0e]/95 border-white/10 backdrop-blur-2xl"
           >
             {/* Header */}
@@ -98,13 +127,13 @@ export function StudentAIChat({ onClose, isLightGradient = false }: StudentAICha
                 </div>
               </div>
               <div className="flex items-center gap-1">
-                <button 
+                <button
                   onClick={() => setMessages([{ role: 'assistant', content: 'Диалог очищен. О чем поговорим?' }])}
                   className="text-[11px] font-medium text-white/50 hover:text-white/80 transition-colors px-2 py-1.5 rounded-full hover:bg-white/5"
                 >
                   Очистить
                 </button>
-                <button 
+                <button
                   onClick={() => {
                     setIsOpen(false);
                     if (onClose) onClose();
@@ -138,6 +167,10 @@ export function StudentAIChat({ onClose, isLightGradient = false }: StudentAICha
                        <p className="text-xs text-white/60">Получить наводящие вопросы</p>
                      </div>
                    </button>
+                   <div className="flex items-center gap-2 p-3 rounded-2xl bg-[#8B5CF6]/5 border border-[#8B5CF6]/15">
+                     <ImageIcon className="w-4 h-4 text-[#8B5CF6]/60 shrink-0" />
+                     <p className="text-xs text-white/40">Нажми <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white/60 text-[10px] font-mono">Ctrl+V</kbd> внутри чата, чтобы вставить скриншот</p>
+                   </div>
                  </div>
               )}
 
@@ -154,17 +187,30 @@ export function StudentAIChat({ onClose, isLightGradient = false }: StudentAICha
                     }`}>
                       {msg.role === 'user' ? <User className="w-3 h-3 text-white" /> : <Bot className="w-3 h-3 text-white" />}
                     </div>
-                    <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${
-                      msg.role === 'user' 
-                        ? 'bg-white/10 text-white rounded-br-sm' 
+                    <div className={`max-w-[85%] rounded-2xl text-sm overflow-hidden ${
+                      msg.role === 'user'
+                        ? 'bg-white/10 text-white rounded-br-sm'
                         : 'bg-gradient-to-br from-[#8B5CF6]/20 to-transparent border border-[#8B5CF6]/30 text-white/90 rounded-bl-sm'
                     }`}>
-                      {/* Basic markdown parsing for bold text or line breaks */}
-                      {msg.content.split('\n').map((line, i) => (
-                        <p key={i} className={i !== 0 ? 'mt-1' : ''}>
-                          {line.split('**').map((text, j) => j % 2 === 1 ? <strong key={j} className="text-white font-bold">{text}</strong> : text)}
-                        </p>
-                      ))}
+                      {/* Screenshot thumbnail in user messages */}
+                      {msg.role === 'user' && msg.image && (
+                        <div className="p-1.5 pb-0">
+                          <img
+                            src={msg.image}
+                            alt="скриншот"
+                            className="rounded-xl w-full max-h-48 object-cover border border-white/10 cursor-pointer hover:opacity-90 transition-opacity"
+                            onClick={() => window.open(msg.image, '_blank')}
+                          />
+                        </div>
+                      )}
+                      <div className="p-3">
+                        {/* Basic markdown parsing for bold text or line breaks */}
+                        {msg.content.split('\n').map((line, i) => (
+                          <p key={i} className={i !== 0 ? 'mt-1' : ''}>
+                            {line.split('**').map((text, j) => j % 2 === 1 ? <strong key={j} className="text-white font-bold">{text}</strong> : text)}
+                          </p>
+                        ))}
+                      </div>
                     </div>
                   </motion.div>
                 ))}
@@ -181,24 +227,89 @@ export function StudentAIChat({ onClose, isLightGradient = false }: StudentAICha
 
             {/* Input */}
             <div className="p-3 border-t border-white/10 bg-white/5 shrink-0">
+              {/* Pasted image preview */}
+              <AnimatePresence>
+                {pastedImage && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                    animate={{ opacity: 1, height: 'auto', marginBottom: 8 }}
+                    exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                    className="relative inline-flex"
+                  >
+                    <img
+                      src={pastedImage}
+                      alt="вложение"
+                      className="h-20 rounded-xl border border-[#8B5CF6]/40 object-cover shadow-[0_0_12px_rgba(139,92,246,0.2)] cursor-zoom-in hover:opacity-90 transition-opacity"
+                      onClick={() => setLightboxImage(pastedImage)}
+                      title="Нажми, чтобы увеличить"
+                    />
+                    <button
+                      onClick={() => setPastedImage(null)}
+                      className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-[#1a1a2e] border border-white/20 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-[#8B5CF6] transition-all"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               <form onSubmit={handleSend} className="relative flex items-center">
-                <input 
+                <input
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="Спроси у наставника..."
+                  placeholder={pastedImage ? 'Добавь комментарий к скриншоту…' : 'Спроси у наставника…'}
                   className="w-full bg-white/5 border border-white/10 rounded-full py-3 pl-4 pr-12 text-sm text-white placeholder-white/40 focus:outline-none focus:border-[#8B5CF6]/50 focus:ring-1 focus:ring-[#8B5CF6]/50 transition-all"
                 />
-                <button 
+                <button
                   type="submit"
-                  disabled={!input.trim() || isLoading}
+                  disabled={(!input.trim() && !pastedImage) || isLoading}
                   className="absolute right-1 p-2 bg-[#8B5CF6] hover:bg-[#7C3AED] disabled:opacity-50 disabled:hover:bg-[#8B5CF6] text-white rounded-full transition-all shadow-[0_0_10px_rgba(139,92,246,0.4)]"
                 >
                   <Send className="w-4 h-4" />
                 </button>
               </form>
+              {!pastedImage && (
+                <p className="text-center text-white/20 text-[10px] mt-1.5">
+                  Ctrl+V — вставить скриншот
+                </p>
+              )}
             </div>
 
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Lightbox */}
+      <AnimatePresence>
+        {lightboxImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+            onClick={() => setLightboxImage(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.85, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.85, opacity: 0 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+              className="relative max-w-[90vw] max-h-[90vh]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <img
+                src={lightboxImage}
+                alt="полный размер"
+                className="max-w-full max-h-[85vh] rounded-2xl border border-[#8B5CF6]/40 shadow-[0_0_40px_rgba(139,92,246,0.3)] object-contain"
+              />
+              <button
+                onClick={() => setLightboxImage(null)}
+                className="absolute -top-3 -right-3 w-8 h-8 bg-[#1a1a2e] border border-white/20 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-[#8B5CF6] transition-all shadow-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>

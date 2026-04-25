@@ -57,7 +57,7 @@ export async function apiRequest<T = any>(
   const method = options?.method || 'GET';
   const body   = options?.body ? JSON.parse(options.body as string) : null;
 
-  await new Promise(r => setTimeout(r, 120)); // brief UX delay
+  // ── No artificial delay: optimistic updates already handle the UI ──────
 
   const token = getStoredToken();
   const auth  = decodeToken(token);
@@ -67,20 +67,61 @@ export async function apiRequest<T = any>(
 
   // Unified CRUD helpers
   const dbGet = async (key: string): Promise<any> => {
-    if (useKv) { try { return await kvGet(key); } catch { return lsGet(key); } }
+    if (useKv) {
+      try {
+        const kvResult = await kvGet(key);
+        return kvResult ?? lsGet(key);
+      } catch { return lsGet(key); }
+    }
     return lsGet(key);
   };
+  // dbSet: writes to localStorage first (instant), then awaits KV so cross-device
+  // data (assignments, submissions) is guaranteed to reach other browsers.
   const dbSet = async (key: string, value: any): Promise<void> => {
     lsSet(key, value);
-    if (useKv) { try { await kvSet(key, value); } catch (e) { console.warn('kvSet failed:', e); } }
+    if (useKv) {
+      try {
+        await kvSet(key, value);
+      } catch (e) {
+        console.warn('kvSet failed:', e);
+        // localStorage copy remains as fallback on the current device
+      }
+    }
   };
   const dbDel = async (key: string): Promise<void> => {
     lsDel(key);
-    if (useKv) { try { await kvDel(key); } catch {} }
+    if (useKv) {
+      try {
+        await kvDel(key);
+      } catch (e) {
+        // Log but don't throw — localStorage is already clean.
+        // KV inconsistency is handled by localDeletedRef guard in the dashboard.
+        console.warn('kvDel failed for key', key, ':', e);
+      }
+    }
   };
   const dbByPrefix = async (prefix: string): Promise<any[]> => {
-    if (useKv) { try { return await kvGetByPrefix(prefix); } catch { return lsByPrefix(prefix); } }
-    return lsByPrefix(prefix);
+    const lsItems = lsByPrefix(prefix);
+    if (!useKv) return lsItems;
+
+    try {
+      const kvItems = await kvGetByPrefix(prefix);
+      const seen = new Set<string>();
+      const result: any[] = [];
+      for (const item of kvItems) {
+        if (!item) continue;
+        const uid = String(item.id ?? item.email ?? item.key ?? JSON.stringify(item));
+        if (!seen.has(uid)) { seen.add(uid); result.push(item); }
+      }
+      for (const item of lsItems) {
+        if (!item) continue;
+        const uid = String(item.id ?? item.email ?? item.key ?? JSON.stringify(item));
+        if (!seen.has(uid)) { seen.add(uid); result.push(item); }
+      }
+      return result;
+    } catch {
+      return lsItems;
+    }
   };
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -88,154 +129,152 @@ export async function apiRequest<T = any>(
   // ══════════════════════════════════════════════════════════════════════════
   if (path.startsWith('/auth/register') && method === 'POST') {
     const email = body.email.toLowerCase().trim();
+    const name  = (body.name || '').trim();
+    const role  = body.role || 'student';
 
-    // 1. Register with Supabase Auth (password stored securely in Supabase)
-    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+    // ── 1. Check for duplicates ──────────────────────────────────────────
+    const existingKv    = useKv ? await kvGet(`user:${email}`).catch(() => null) : null;
+    const existingLocal = lsGet(`user:${email}`);
+    if (existingKv || existingLocal) {
+      throw new Error('Пользователь с таким email уже зарегистрирован');
+    }
+
+    // ── 2. Hash password (kv_store is primary auth source) ───────────────
+    const saltArr    = crypto.getRandomValues(new Uint8Array(16));
+    const salt       = Array.from(saltArr).map(b => b.toString(16).padStart(2, '0')).join('');
+    const saltedData = new TextEncoder().encode(body.password + salt);
+    const hashBuf    = await crypto.subtle.digest('SHA-256', saltedData);
+    const passwordHash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    // ── 3. Save profile + credentials to kv_store ────────────────────────
+    const userProfile = {
+      name,
+      email,
+      role,
+      studentClass: body.studentClass || null,
+      passwordHash,
+      salt,
+      createdAt: Date.now(),
+    };
+
+    lsSet(`user:${email}`, userProfile);
+    if (useKv) {
+      try {
+        await kvSet(`user:${email}`, userProfile);
+      } catch (e) {
+        console.warn('kvSet profile failed during register:', e);
+      }
+    }
+
+    // ── 4. Try Supabase Auth in background (best-effort, non-blocking) ───
+    supabase.auth.signUp({
       email: body.email.trim(),
       password: body.password,
-      options: {
-        data: {
-          name:         body.name,
-          role:         body.role,
-          studentClass: body.studentClass || null,
-        },
-      },
+      options: { data: { name, role, studentClass: body.studentClass || null } },
+    }).then(({ data }) => {
+      if (data?.session) {
+        resetAvailabilityCache();
+        console.log('Supabase Auth signup succeeded for:', email);
+      }
+    }).catch(() => {
+      // Supabase Auth unavailable — kv_store credentials are sufficient
     });
 
-    if (signUpError) {
-      // If user already exists in Supabase Auth → try to detect it
-      if (
-        signUpError.message.toLowerCase().includes('already registered') ||
-        signUpError.message.toLowerCase().includes('already been registered') ||
-        signUpError.message.toLowerCase().includes('user already exists')
-      ) {
-        throw new Error('Пользователь с таким email уже зарегистрирован');
-      }
-      throw new Error(signUpError.message);
-    }
-
-    // Email confirmation required — Supabase project setting
-    if (!signUpData.session) {
-      throw new Error(
-        'На ваш email отправлена ссылка для подтверждения. ' +
-        'Перейдите по ней и затем войдите в аккаунт. ' +
-        '(Или отключите подтверждение email в настройках Supabase: Authentication → Settings → Disable email confirmations)'
-      );
-    }
-
-    // 2. After auth session is active, reset kv probe (now authenticated)
-    resetAvailabilityCache();
-    // Re-check availability with authenticated client
-    const kvNowAvail = await isAvailable();
-
-    // 3. Store public profile in kv_store (and localStorage mirror)
-    const userProfile = {
-      name:         body.name,
-      email,
-      role:         body.role,
-      studentClass: body.studentClass || null,
-      createdAt:    Date.now(),
-    };
-    if (kvNowAvail) {
-      try { await kvSet(`user:${email}`, userProfile); } catch (e) { console.warn('Profile kvSet failed:', e); }
-    }
-    lsSet(`user:${email}`, userProfile);
-
-    const token = makeToken(email, body.role);
+    const token = makeToken(email, role);
     return {
       success: true,
       token,
-      user: { name: body.name, email, role: body.role, studentClass: body.studentClass || null },
+      user: { name, email, role, studentClass: body.studentClass || null },
     } as any;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  AUTH — Login (Supabase Auth with legacy fallback)
+  //  AUTH — Login (kv_store primary, Supabase Auth secondary)
   // ══════════════════════════════════════════════════════════════════════════
   if (path.startsWith('/auth/login') && method === 'POST') {
     const email = body.email.toLowerCase().trim();
 
-    // ── Try Supabase Auth first ──────────────────────────────────────────
-    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-      email: body.email.trim(),
-      password: body.password,
-    });
+    // ── 1. kv_store / localStorage credential check (always works) ───────
+    const storedUser = useKv
+      ? (await kvGet(`user:${email}`).catch(() => null)) ?? lsGet(`user:${email}`)
+      : lsGet(`user:${email}`);
 
-    if (!signInError && signInData.session) {
-      // Successful Supabase Auth login
-      resetAvailabilityCache();
-      await isAvailable(); // re-probe with authenticated client
+    if (storedUser?.passwordHash && storedUser.salt !== undefined) {
+      const data = new TextEncoder().encode(body.password + (storedUser.salt || ''));
+      const hash = await crypto.subtle.digest('SHA-256', data);
+      const hex  = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
 
-      const meta = signInData.user.user_metadata || {};
-      let name         = meta.name         || '';
-      let role         = meta.role         || 'student';
-      let studentClass = meta.studentClass || null;
-
-      // Also try kv_store for richer profile (catches migrated users)
-      try {
-        const kvProfile = await dbGet(`user:${email}`) as any;
-        if (kvProfile) {
-          name         = kvProfile.name         || name;
-          role         = kvProfile.role         || role;
-          studentClass = kvProfile.studentClass ?? studentClass;
-        }
-      } catch {}
-
-      // Ensure profile is in kv_store for other users to query
-      const profile = { name, email, role, studentClass, createdAt: Date.now() };
-      try { await dbSet(`user:${email}`, profile); } catch {}
-
-      const token = makeToken(email, role);
-      return { success: true, token, user: { name, email, role, studentClass } } as any;
-    }
-
-    // ── Supabase Auth failed → try legacy kv_store / localStorage login ──
-    // This handles existing accounts registered before Supabase Auth integration
-    console.warn('Supabase Auth login failed, trying legacy:', signInError?.message);
-
-    const legacyUser = await dbGet(`user:${email}`) as any;
-
-    if (legacyUser) {
-      // Verify password (legacy hashed format)
-      let valid = false;
-      if (legacyUser.passwordHash && legacyUser.salt !== undefined) {
-        const data  = new TextEncoder().encode(body.password + (legacyUser.salt || ''));
-        const hash  = await crypto.subtle.digest('SHA-256', data);
-        const hex   = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
-        valid = hex === legacyUser.passwordHash;
-      } else if (legacyUser.password) {
-        valid = legacyUser.password === body.password;
-      }
-
-      if (valid) {
-        // Migrate to Supabase Auth silently
-        supabase.auth.signUp({
+      if (hex === storedUser.passwordHash) {
+        // Password matches — try Supabase Auth session in background
+        supabase.auth.signInWithPassword({
           email: body.email.trim(),
           password: body.password,
-          options: { data: { name: legacyUser.name, role: legacyUser.role, studentClass: legacyUser.studentClass } },
         }).then(({ data: sd }) => {
           if (sd?.session) {
             resetAvailabilityCache();
-            console.log('Legacy user migrated to Supabase Auth:', email);
+            console.log('Supabase Auth session established for:', email);
           }
         }).catch(() => {});
 
-        const token = makeToken(email, legacyUser.role);
+        const token = makeToken(email, storedUser.role);
         return {
           success: true,
           token,
-          user: { name: legacyUser.name, email, role: legacyUser.role, studentClass: legacyUser.studentClass },
+          user: {
+            name:         storedUser.name,
+            email,
+            role:         storedUser.role,
+            studentClass: storedUser.studentClass,
+          },
         } as any;
       }
     }
 
-    // Check very old rf_users array
+    // ── 2. Supabase Auth fallback (for users who signed up via OAuth etc.) ─
     try {
-      const legacy = JSON.parse(localStorage.getItem('rf_users') || '[]') as any[];
+      const { data: signInData } = await supabase.auth.signInWithPassword({
+        email: body.email.trim(),
+        password: body.password,
+      });
+
+      if (signInData?.session) {
+        resetAvailabilityCache();
+        await isAvailable();
+
+        const meta         = signInData.user.user_metadata || {};
+        const name         = meta.name         || email.split('@')[0];
+        const role         = meta.role         || 'student';
+        const studentClass = meta.studentClass || null;
+
+        // Persist credentials to kv_store so next login uses path 1
+        const saltArr    = crypto.getRandomValues(new Uint8Array(16));
+        const salt       = Array.from(saltArr).map(b => b.toString(16).padStart(2, '0')).join('');
+        const saltedData = new TextEncoder().encode(body.password + salt);
+        const hashBuf    = await crypto.subtle.digest('SHA-256', saltedData);
+        const passwordHash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+        const migratedProfile = { name, email, role, studentClass, passwordHash, salt, createdAt: Date.now() };
+        lsSet(`user:${email}`, migratedProfile);
+        if (useKv) { kvSet(`user:${email}`, migratedProfile).catch(() => {}); }
+
+        const token = makeToken(email, role);
+        return { success: true, token, user: { name, email, role, studentClass } } as any;
+      }
+    } catch {
+      // Supabase Auth unreachable — handled below
+    }
+
+    // ── 3. Very old rf_users plain-text array ─────────────────────────────
+    try {
+      const legacy      = JSON.parse(localStorage.getItem('rf_users') || '[]') as any[];
       const legacyEntry = legacy.find((u: any) => u.email === email && u.password === body.password);
       if (legacyEntry) {
         const token = makeToken(email, legacyEntry.role);
-        return { success: true, token, user: { name: legacyEntry.name, email, role: legacyEntry.role, studentClass: legacyEntry.studentClass } } as any;
+        return {
+          success: true,
+          token,
+          user: { name: legacyEntry.name, email, role: legacyEntry.role, studentClass: legacyEntry.studentClass },
+        } as any;
       }
     } catch {}
 
@@ -258,7 +297,9 @@ export async function apiRequest<T = any>(
   if (path === '/assignments' && method === 'POST') {
     if (!auth || auth.role !== 'teacher') throw new Error('Требуется авторизация учителя');
 
-    const id = Date.now();
+    // Accept the client-side tempId when provided so the optimistic entry and
+    // the persisted entry share the same ID — no "replace" re-render needed.
+    const id = typeof body.id === 'number' ? body.id : Date.now();
     const assignedClass = body.assignedClass || body.class;
     const assignment = {
       id,
@@ -270,7 +311,7 @@ export async function apiRequest<T = any>(
       teacherEmail: auth.email,
       teacherName:  body.teacherName || 'Учитель',
       studentsCount: 0,
-      createdAt:    Date.now(),
+      createdAt:    id,
     };
 
     await dbSet(`assignment:${id}`, assignment);
@@ -287,9 +328,9 @@ export async function apiRequest<T = any>(
     return { success: true } as any;
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
+  // ═════════════════════════════════════════════════════════════════════════
   //  TEACHER — Get subjects by email
-  // ══════════════════════════════════════════════════════════════════════════
+  // ═════════════════════════════════════════════════════════════════════════
   if (path.startsWith('/teacher/subjects') && method === 'GET') {
     if (!auth) throw new Error('Требуется авторизация');
     const email = new URLSearchParams(path.split('?')[1]).get('email') || auth.email;
@@ -380,12 +421,42 @@ export async function apiRequest<T = any>(
     const allSubs = await dbByPrefix('submission:') as any[];
     const existing = allSubs.find((s: any) => s && s.assignmentId === id && s.studentEmail === auth.email);
 
+    // Compress screenshot before storing to avoid hitting KV size limits.
+    // Resizes to max 800 px wide and encodes as JPEG 0.70 quality.
+    // A typical classroom photo goes from ~800 KB → ~60-120 KB this way.
+    const compressImage = async (dataUrl: string): Promise<string> => {
+      if (!dataUrl || !dataUrl.startsWith('data:')) return dataUrl;
+      return new Promise((resolve) => {
+        try {
+          const img = new Image();
+          img.onload = () => {
+            try {
+              const MAX_W = 800;
+              const scale = img.width > MAX_W ? MAX_W / img.width : 1;
+              const canvas = document.createElement('canvas');
+              canvas.width  = Math.round(img.width  * scale);
+              canvas.height = Math.round(img.height * scale);
+              const ctx = canvas.getContext('2d');
+              if (!ctx) { resolve(dataUrl); return; }
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              resolve(canvas.toDataURL('image/jpeg', 0.70));
+            } catch { resolve(dataUrl); }
+          };
+          img.onerror = () => resolve(dataUrl);
+          img.src = dataUrl;
+        } catch { resolve(dataUrl); }
+      });
+    };
+
+    const rawScreenshot: string | null = body.screenshot || null;
+    const screenshotUrl = rawScreenshot ? await compressImage(rawScreenshot) : null;
+
     // If a rejected submission exists, reset it to pending so the student can re-submit
     if (existing && existing.status === 'rejected') {
       const resubmitted = {
         ...existing,
         status: 'pending',
-        screenshotUrl: body.screenshot || null,
+        screenshotUrl,
         submittedAt: Date.now(),
         teacherEmail,
       };
@@ -405,7 +476,7 @@ export async function apiRequest<T = any>(
       teacherEmail,
       studentName:  body.studentName || 'Ученик',
       studentEmail: auth.email,
-      screenshotUrl: body.screenshot || null,
+      screenshotUrl,
       submittedAt:  Date.now(),
       status:       'pending',
       xp:           submissionXp,
@@ -439,6 +510,29 @@ export async function apiRequest<T = any>(
 
     const updated = { ...submission, status: body.status };
     await dbSet(`submission:${id}`, updated);
+
+    // ── Immediately sync XP to leaderboard when teacher approves ─────────
+    // This way the student's XP is visible right away without waiting for
+    // the student's own polling cycle to detect the status change.
+    if (body.status === 'approved' && submission.studentEmail) {
+      try {
+        const studentEmail = submission.studentEmail as string;
+        const earnedXp = typeof submission.xp === 'number' ? submission.xp : 20;
+        const existing = await dbGet(`xp:${studentEmail}`) as any;
+        const currentXp = typeof existing?.xp === 'number' ? existing.xp : 0;
+        await dbSet(`xp:${studentEmail}`, {
+          name:         existing?.name         || studentEmail,
+          email:        studentEmail,
+          studentClass: existing?.studentClass || '',
+          xp:           currentXp + earnedXp,
+          updatedAt:    Date.now(),
+        });
+      } catch (e) {
+        console.warn('XP leaderboard sync failed on approval:', e);
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     return { success: true, submission: updated } as any;
   }
 
@@ -494,7 +588,7 @@ export async function apiRequest<T = any>(
 
   // ══════════════════════════════════════════════════════════════════════════
   //  STUDENTS — Get all students (teacher only)
-  // ══════════════════════════════════════════════════════════════════════════
+  // ═══════════════════���═════���════════════════════════════════════════════════
   if (path.startsWith('/students/all') && method === 'GET') {
     if (!auth || auth.role !== 'teacher') throw new Error('Требуется авторизация учителя');
     const allUsers = await dbByPrefix('user:') as any[];
@@ -507,6 +601,23 @@ export async function apiRequest<T = any>(
       }))
       .sort((a: any, b: any) => a.name.localeCompare(b.name, 'ru'));
     return students as any;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  PROFILE — Save / get student character choice
+  // ══════════════════════════════════════════════════════════════════════════
+  if (path.startsWith('/profile/char') && method === 'POST') {
+    if (!auth) throw new Error('Требуетс авторизация');
+    const characterId = body?.characterId || 'mage';
+    await dbSet(`char:${auth.email}`, { characterId, updatedAt: Date.now() });
+    return { success: true } as any;
+  }
+
+  if (path.startsWith('/profile/char') && method === 'GET') {
+    const email = new URLSearchParams(path.split('?')[1]).get('email') || auth?.email || '';
+    if (!email) throw new Error('Email не указан');
+    const data = await dbGet(`char:${email}`) as any;
+    return { characterId: data?.characterId || 'mage' } as any;
   }
 
   throw new Error(`API 404 — Not Found: ${method} ${path}`);

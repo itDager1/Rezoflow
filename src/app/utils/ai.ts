@@ -1,4 +1,7 @@
-export const OPENROUTER_API_KEY = "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";
+// Replace the invalid/expired key with a placeholder.
+// Set your real OpenRouter key here to enable AI features.
+// Get one at: https://openrouter.ai/keys
+export const OPENROUTER_API_KEY = "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";
 
 export interface ParsedTask {
   title: string;
@@ -331,7 +334,109 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
 export type ChatMessage = {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  image?: string; // base64 data URL (vision messages)
 };
+
+export interface AIHomeworkCheckResult {
+  isCorrect: boolean;
+  grade: 'Отлично' | 'Хорошо' | 'Удовлетворительно' | 'Неверно';
+  summary: string;
+  issues: string[];
+  suggestions: string[];
+}
+
+export async function checkHomeworkWithAI(
+  taskTitle: string,
+  taskDescription: string,
+  screenshotUrl: string
+): Promise<AIHomeworkCheckResult> {
+  if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === 'YOUR_OPENROUTER_API_KEY_HERE') {
+    await new Promise(r => setTimeout(r, 1500));
+    return {
+      isCorrect: true,
+      grade: 'Хорошо',
+      summary: 'ИИ работает в демо-режиме. Настройте OpenRouter API ключ для реальной проверки.',
+      issues: [],
+      suggestions: ['Добавьте ключ OpenRouter в /src/app/utils/ai.ts для полноценной работы.'],
+    };
+  }
+
+  const systemPrompt = `Ты — опытный школьный учитель-проверяющий. Тебе дано задание и фотография работы ученика.
+Твоя задача:
+1. Внимательно изучить фотографию работы ученика.
+2. Сравнить её с условием задания.
+3. Оценить правильность выполнения.
+4. Вернуть ТОЛЬКО валидный JSON без markdown-разметки.
+
+Задание: "${taskTitle}"
+Описание задания: "${taskDescription}"
+
+Формат ответа JSON:
+{
+  "isCorrect": true|false,
+  "grade": "Отлично"|"Хорошо"|"Удовлетворительно"|"Неверно",
+  "summary": "Краткий общий вывод о работе (2-3 предложения)",
+  "issues": ["ошибка 1", "ошибка 2"],
+  "suggestions": ["рекомендация 1", "рекомендация 2"]
+}
+
+Правила выставления оценки:
+- "Отлично" — всё выполнено верно, без существенных ошибок
+- "Хорошо" — основное выполнено верно, есть незначительные недочёты
+- "Удовлетворительно" — есть существенные ошибки, но задание частично выполнено
+- "Неверно" — задание выполнено неверно или не соответствует условию`;
+
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': window.location.origin,
+        'X-Title': 'RezoFlow Homework Check',
+      },
+      body: JSON.stringify({
+        model: 'openai/gpt-4o-mini',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: systemPrompt },
+              { type: 'image_url', image_url: { url: screenshotUrl } },
+            ],
+          },
+        ],
+        response_format: { type: 'json_object' },
+      }),
+    });
+
+    if (!response.ok) throw new Error(`OpenRouter error: ${response.status}`);
+
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content ?? '{}';
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      const parsed = JSON.parse(match[0]);
+      return {
+        isCorrect: !!parsed.isCorrect,
+        grade: parsed.grade ?? 'Удовлетворительно',
+        summary: parsed.summary ?? 'Не удалось получить описание.',
+        issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+        suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : [],
+      };
+    }
+  } catch (err) {
+    console.error('checkHomeworkWithAI error:', err);
+  }
+
+  return {
+    isCorrect: false,
+    grade: 'Удовлетворительно',
+    summary: 'Не удалось проанализировать работу. Попробуйте ещё раз.',
+    issues: [],
+    suggestions: [],
+  };
+}
 
 export async function chatWithAI(messages: ChatMessage[]): Promise<string> {
   if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === "YOUR_OPENROUTER_API_KEY_HERE") {
@@ -343,10 +448,22 @@ export async function chatWithAI(messages: ChatMessage[]): Promise<string> {
   // Prepend system instruction for the AI persona
   const systemPrompt: ChatMessage = {
     role: 'system',
-    content: `Ты — ИИ-помощник RezoFlow для учеников. Твоя задача — помогать анализировать и составлять оптимальное расписание, а также давать подсказки по сложным заданиям. Строго запрещено решать задания за пользователя — только давай подсказки, наводящие вопросы и объясняй концепции. Будь дружелюбным, поддерживающим и используй понятный язык.`
+    content: `Ты — ИИ-помощник RezoFlow для учеников. Твоя задача — помогать анализировать и составлять оптимальное расписание, а также давать подсказки по сложным заданиям. Строго запрещено решать задания за пользователя — только давай подсказки, наводящие вопросы и объясняй концепции. Будь дружелюбным, поддерживающим и используй понятный язык. Если ученик прикрепил скриншот — внимательно его изучи и помоги разобраться с тем, что на нём изображено.`
   };
 
-  const payloadMessages = [systemPrompt, ...messages];
+  // Convert ChatMessage[] → OpenRouter API format (handle vision messages)
+  const payloadMessages = [systemPrompt, ...messages].map(msg => {
+    if (msg.role === 'user' && msg.image) {
+      return {
+        role: msg.role as string,
+        content: [
+          { type: 'text', text: msg.content || 'Посмотри на этот скриншот и помоги разобраться.' },
+          { type: 'image_url', image_url: { url: msg.image } },
+        ],
+      };
+    }
+    return { role: msg.role as string, content: msg.content };
+  });
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",

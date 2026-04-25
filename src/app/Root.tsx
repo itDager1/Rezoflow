@@ -14,31 +14,41 @@ export function Root() {
 
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('rezoflow_authenticated') === 'true';
+      const stored = localStorage.getItem('rezoflow_authenticated');
+      // Автоматически логинимся как ученик при первом запуске
+      if (stored === null) {
+        localStorage.setItem('rezoflow_authenticated', 'true');
+        localStorage.setItem('rezoflow_userName', 'Алексей Иванов');
+        localStorage.setItem('rezoflow_userEmail', 'student@demo.ru');
+        localStorage.setItem('rezoflow_userRole', 'student');
+        localStorage.setItem('rezoflow_studentClass', '5А');
+        return true;
+      }
+      return stored === 'true';
     }
-    return false;
+    return true; // По умолчанию показываем интерфейс ученика
   });
 
   const [userName, setUserName] = useState(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('rezoflow_userName') || '';
+      return localStorage.getItem('rezoflow_userName') || 'Алексей Иванов';
     }
-    return '';
+    return 'Алексей Иванов';
   });
 
   const [userEmail, setUserEmail] = useState(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('rezoflow_userEmail') || '';
+      return localStorage.getItem('rezoflow_userEmail') || 'student@demo.ru';
     }
-    return '';
+    return 'student@demo.ru';
   });
 
   const [userRole, setUserRole] = useState<'student' | 'teacher' | 'parent' | null>(() => {
     if (typeof window !== 'undefined') {
       const role = localStorage.getItem('rezoflow_userRole');
-      return (role as 'student' | 'teacher' | 'parent') || null;
+      return (role as 'student' | 'teacher' | 'parent') || 'student';
     }
-    return null;
+    return 'student';
   });
 
   const [studentClass, setStudentClass] = useState<string>(() => {

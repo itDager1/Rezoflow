@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RezoFlow — Образовательная платформа</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0D0D0D;
+      color: #E8E8E8;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* ============ UTILITIES ============ */
+    .hidden { display: none !important; }
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ============ DASHBOARD LAYOUT ============ */
+    .dashboard {
+      min-height: 100vh;
+      padding: 40px 0;
+      position: relative;
+    }
+
+    .dashboard-header {
+      margin-bottom: 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+
+    .welcome-section h1 {
+      font-size: 36px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    .welcome-section p {
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 16px;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .btn {
+      padding: 10px 20px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn:hover {
+      background: rgba(139, 92, 246, 0.1);
+      border-color: rgba(139, 92, 246, 0.3);
+    }
+
+    .btn-primary {
+      background: linear-gradient(90deg, #8B5CF6 0%, #7C3AED 100%);
+      border-color: rgba(255, 255, 255, 0.1);
+      box-shadow: 0 0 20px rgba(139, 92, 246, 0.3);
+    }
+
+    .btn-primary:hover {
+      box-shadow: 0 0 30px rgba(139, 92, 246, 0.5);
+    }
+
+    /* ============ STATS GRID ============ */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+
+    .stat-card {
+      background: rgba(26, 26, 26, 0.8);
+      backdrop-filter: blur(40px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      padding: 24px;
+      transition: all 0.3s ease;
+    }
+
+    .stat-card:hover {
+      border-color: rgba(139, 92, 246, 0.3);
+      box-shadow: 0 8px 30px rgba(139, 92, 246, 0.15);
+      transform: translateY(-2px);
+    }
+
+    .stat-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: rgba(255, 255, 255, 0.4);
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+
+    .stat-value {
+      font-size: 42px;
+      font-weight: 800;
+      color: #8B5CF6;
+      text-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+      margin-bottom: 8px;
+    }
+
+    .stat-description {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.4);
+    }
+
+    /* ============ TASK CARDS ============ */
+    .tasks-section h2 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .task-cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+      gap: 24px;
+    }
+
+    .task-card {
+      position: relative;
+      background: rgba(26, 26, 26, 0.8);
+      backdrop-filter: blur(40px);
+      border-radius: 16px;
+      padding: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      transition: all 0.3s ease;
+      overflow: hidden;
+    }
+
+    .task-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(139, 92, 246, 0.05) 0%, transparent 50%);
+      opacity: 0;
+      transition: opacity 0.5s ease;
+      pointer-events: none;
+    }
+
+    .task-card:hover::before { opacity: 1; }
+
+    .task-card:hover {
+      border-color: rgba(139, 92, 246, 0.3);
+      box-shadow: 0 8px 30px rgba(139, 92, 246, 0.18);
+      transform: translateY(-2px);
+    }
+
+    .task-card.teal-accent::before {
+      background: linear-gradient(135deg, rgba(20, 184, 166, 0.05) 0%, transparent 50%);
+    }
+
+    .task-card.teal-accent:hover {
+      border-color: rgba(20, 184, 166, 0.3);
+      box-shadow: 0 8px 30px rgba(20, 184, 166, 0.18);
+    }
+
+    .accent-stripe {
+      position: absolute;
+      left: 0;
+      top: 16px;
+      bottom: 16px;
+      width: 3px;
+      border-radius: 0 999px 999px 0;
+      opacity: 0.7;
+      transition: opacity 0.3s ease;
+    }
+
+    .task-card:hover .accent-stripe { opacity: 1; }
+
+    .accent-stripe.purple { background: rgba(139, 92, 246, 0.6); }
+    .accent-stripe.teal { background: rgba(20, 184, 166, 0.6); }
+
+    .task-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.9);
+      margin-bottom: 8px;
+      padding-left: 4px;
+      transition: color 0.3s ease;
+    }
+
+    .task-card:hover .task-title { color: #8B5CF6; }
+    .task-card.teal-accent:hover .task-title { color: #14B8A6; }
+
+    .task-description {
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 14px;
+      font-weight: 300;
+      margin-bottom: 16px;
+      padding-left: 4px;
+      line-height: 1.6;
+    }
+
+    .task-badges {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .badge {
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      border: 1px solid;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .badge-subject {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .badge-easy {
+      background: rgba(34, 197, 94, 0.1);
+      border-color: rgba(34, 197, 94, 0.2);
+      color: #4ADE80;
+    }
+
+    .badge-medium {
+      background: rgba(234, 179, 8, 0.1);
+      border-color: rgba(234, 179, 8, 0.2);
+      color: #FACC15;
+    }
+
+    .badge-hard {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.2);
+      color: #F87171;
+    }
+
+    .badge-xp {
+      background: rgba(234, 179, 8, 0.1);
+      border-color: rgba(234, 179, 8, 0.2);
+      color: #FACC15;
+    }
+
+    .badge-personal {
+      background: rgba(20, 184, 166, 0.1);
+      border-color: rgba(20, 184, 166, 0.2);
+      color: #14B8A6;
+    }
+
+    .task-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .task-meta {
+      display: flex;
+      gap: 20px;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.4);
+    }
+
+    .btn-complete {
+      padding: 6px 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid transparent;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.6);
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .task-card:hover .btn-complete {
+      background: rgba(139, 92, 246, 0.1);
+      border-color: rgba(139, 92, 246, 0.2);
+      color: #8B5CF6;
+    }
+
+    .task-card.teal-accent:hover .btn-complete {
+      background: rgba(20, 184, 166, 0.1);
+      border-color: rgba(20, 184, 166, 0.2);
+      color: #14B8A6;
+    }
+
+    /* ============ AI CHAT ============ */
+    .ai-fab {
+      position: fixed;
+      bottom: 32px;
+      right: 32px;
+      width: 64px;
+      height: 64px;
+      background: linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%);
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      z-index: 1000;
+    }
+
+    .ai-fab:hover {
+      box-shadow: 0 0 40px rgba(139, 92, 246, 0.6);
+      transform: scale(1.05);
+    }
+
+    .ai-chat-window {
+      position: fixed;
+      bottom: 32px;
+      right: 32px;
+      width: 400px;
+      height: 600px;
+      background: rgba(10, 10, 14, 0.95);
+      backdrop-filter: blur(40px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 24px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 1001;
+    }
+
+    .ai-chat-header {
+      padding: 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .ai-chat-header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .ai-chat-avatar {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 15px rgba(139, 92, 246, 0.3);
+    }
+
+    .ai-chat-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .ai-chat-messages {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .ai-message {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+
+    .ai-message.user {
+      flex-direction: row-reverse;
+    }
+
+    .ai-message-bubble {
+      max-width: 75%;
+      padding: 12px 16px;
+      border-radius: 16px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .ai-message.assistant .ai-message-bubble {
+      background: rgba(139, 92, 246, 0.15);
+      border: 1px solid rgba(139, 92, 246, 0.2);
+      color: #fff;
+    }
+
+    .ai-message.user .ai-message-bubble {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #fff;
+    }
+
+    .ai-chat-input-wrapper {
+      padding: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.02);
+      display: flex;
+      gap: 8px;
+    }
+
+    .ai-chat-input {
+      flex: 1;
+      padding: 12px 16px;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      color: #fff;
+      font-size: 14px;
+      resize: none;
+      font-family: inherit;
+    }
+
+    .ai-chat-input:focus {
+      outline: none;
+      border-color: #8B5CF6;
+    }
+
+    .btn-send {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%);
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s ease;
+    }
+
+    .btn-send:hover {
+      box-shadow: 0 0 20px rgba(139, 92, 246, 0.5);
+    }
+
+    .btn-close {
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.5);
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 8px;
+      transition: all 0.2s ease;
+    }
+
+    .btn-close:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+    }
+
+    /* ============ ICON SVGs ============ */
+    .icon {
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+
+    /* ============ RESPONSIVE ============ */
+    @media (max-width: 768px) {
+      .task-cards-grid {
+        grid-template-columns: 1fr;
+      }
+      .ai-chat-window {
+        width: calc(100vw - 32px);
+        height: 70vh;
+        bottom: 16px;
+        right: 16px;
+      }
+      .ai-fab {
+        bottom: 16px;
+        right: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ============ STUDENT DASHBOARD ============ -->
+  <div id="studentDashboard" class="dashboard">
+    <div class="container">
+
+      <!-- Header -->
+      <div class="dashboard-header">
+        <div class="welcome-section">
+          <h1>Привет, Алексей! 👋</h1>
+          <p>У тебя <strong>3 активных задания</strong> и <strong>250 XP</strong></p>
+        </div>
+        <div class="header-actions">
+          <button class="btn" onclick="alert('🏆 Рейтинг:\n\n1. Мария Петрова — 450 XP\n2. Иван Сидоров — 380 XP\n3. Анна Смирнова — 320 XP\n4. Дмитрий Козлов — 280 XP\n5. Алексей Иванов — 250 XP')">
+            <span>🏆</span> Рейтинг
+          </button>
+          <button class="btn btn-primary" onclick="alert('Функция выхода')">
+            Выйти
+          </button>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Активные задания</div>
+          <div class="stat-value">3</div>
+          <div class="stat-description">2 от учителя, 1 личное</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">Опыт (XP)</div>
+          <div class="stat-value">250</div>
+          <div class="stat-description">+20 XP за последнее задание</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">Выполнено</div>
+          <div class="stat-value">12</div>
+          <div class="stat-description">На этой неделе</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">Рейтинг</div>
+          <div class="stat-value">#5</div>
+          <div class="stat-description">В классе 5А</div>
+        </div>
+      </div>
+
+      <!-- Tasks Section -->
+      <div class="tasks-section">
+        <h2>
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M9 11l3 3L22 4"/>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+          Активные задания
+        </h2>
+
+        <div class="task-cards-grid">
+
+          <!-- Task 1: Teacher -->
+          <div class="task-card">
+            <div class="accent-stripe purple"></div>
+            <h3 class="task-title">Решить задачи по алгебре</h3>
+            <p class="task-description">Выполните задания из учебника: стр. 45, упражнения 1-5. Запишите решение в тетрадь с подробным пояснением каждого шага.</p>
+            <div class="task-badges">
+              <span class="badge badge-subject">Математика</span>
+              <span class="badge badge-medium">Средне</span>
+              <span class="badge badge-xp">+20 XP после проверки</span>
+            </div>
+            <div class="task-footer">
+              <div class="task-meta">
+                <span>📅 15 мая 2026</span>
+                <span>⏱️ 60 минут</span>
+              </div>
+              <button class="btn-complete" onclick="alert('✅ Задание отправлено на проверку!')">✓ Выполнено</button>
+            </div>
+          </div>
+
+          <!-- Task 2: Student -->
+          <div class="task-card teal-accent">
+            <div class="accent-stripe teal"></div>
+            <h3 class="task-title">Прочитать главу книги</h3>
+            <p class="task-description">Закончить чтение второй главы романа "Война и мир" и записать краткие заметки для обсуждения в классе.</p>
+            <div class="task-badges">
+              <span class="badge badge-subject">Литература</span>
+              <span class="badge badge-easy">Легко</span>
+              <span class="badge badge-personal">📚 Личное задание</span>
+            </div>
+            <div class="task-footer">
+              <div class="task-meta">
+                <span>📅 12 мая 2026</span>
+                <span>⏱️ 40 минут</span>
+              </div>
+              <button class="btn-complete" onclick="alert('✅ Задание выполнено!')">✓ Выполнено</button>
+            </div>
+          </div>
+
+          <!-- Task 3: Teacher (Hard) -->
+          <div class="task-card">
+            <div class="accent-stripe purple"></div>
+            <div style="position: absolute; top: 20px; right: 20px;">
+              <svg style="width: 20px; height: 20px; color: #FACC15; fill: #FACC15; filter: drop-shadow(0 0 8px rgba(250, 204, 21, 0.8));" viewBox="0 0 24 24">
+                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+              </svg>
+            </div>
+            <h3 class="task-title">Проект по физике</h3>
+            <p class="task-description">Создайте презентацию о законах Ньютона с примерами из повседневной жизни. Подготовьте доклад на 5-7 минут.</p>
+            <div class="task-badges">
+              <span class="badge badge-subject">Физика</span>
+              <span class="badge badge-hard">Сложно</span>
+              <span class="badge badge-xp">+50 XP после проверки</span>
+            </div>
+            <div class="task-footer">
+              <div class="task-meta">
+                <span>📅 20 мая 2026</span>
+                <span>⏱️ 180 минут</span>
+              </div>
+              <button class="btn-complete" onclick="alert('✅ Задание отправлено на проверку!')">✓ Выполнено</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============ AI CHAT FAB ============ -->
+  <div id="aiFab" class="ai-fab" onclick="toggleAIChat()">
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+      <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+      <circle cx="12" cy="15" r="1"/>
+    </svg>
+  </div>
+
+  <!-- ============ AI CHAT WINDOW ============ -->
+  <div id="aiChatWindow" class="ai-chat-window hidden">
+    <div class="ai-chat-header">
+      <div class="ai-chat-header-left">
+        <div class="ai-chat-avatar">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+          </svg>
+        </div>
+        <div class="ai-chat-title">ИИ-наставник</div>
+      </div>
+      <button class="btn-close" onclick="toggleAIChat()">
+        <svg class="icon" viewBox="0 0 24 24">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="ai-chat-messages" id="aiMessages">
+      <div class="ai-message assistant">
+        <div class="ai-message-bubble">
+          Привет! Я ИИ-наставник RezoFlow. Я могу помочь тебе составить оптимальное расписание или разобраться с трудной темой. Напиши, с чем нужна помощь!
+        </div>
+      </div>
+    </div>
+
+    <div class="ai-chat-input-wrapper">
+      <input type="text" class="ai-chat-input" id="aiInput" placeholder="Напишите сообщение..." onkeypress="if(event.key==='Enter') sendMessage()">
+      <button class="btn-send" onclick="sendMessage()">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+          <line x1="22" y1="2" x2="11" y2="13"/>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <script>
+    // Toggle AI Chat
+    function toggleAIChat() {
+      const fab = document.getElementById('aiFab');
+      const window = document.getElementById('aiChatWindow');
+
+      if (window.classList.contains('hidden')) {
+        window.classList.remove('hidden');
+        fab.classList.add('hidden');
+      } else {
+        window.classList.add('hidden');
+        fab.classList.remove('hidden');
+      }
+    }
+
+    // Send AI Message
+    function sendMessage() {
+      const input = document.getElementById('aiInput');
+      const messagesContainer = document.getElementById('aiMessages');
+      const message = input.value.trim();
+
+      if (!message) return;
+
+      // Add user message
+      const userMsg = document.createElement('div');
+      userMsg.className = 'ai-message user';
+      userMsg.innerHTML = `<div class="ai-message-bubble">${message}</div>`;
+      messagesContainer.appendChild(userMsg);
+
+      // Clear input
+      input.value = '';
+
+      // Simulate AI response
+      setTimeout(() => {
+        const aiMsg = document.createElement('div');
+        aiMsg.className = 'ai-message assistant';
+
+        const responses = [
+          'Отличный вопрос! Давай разберём это вместе. По математике рекомендую начать с базовых формул, а затем перейти к практическим примерам.',
+          'Я вижу, что у тебя сложное задание. Предлагаю разбить его на маленькие шаги: сначала изучи теорию, затем реши пару простых задач для закрепления.',
+          'Для оптимизации расписания советую начать с самого сложного задания утром, когда концентрация выше. Остальные задачи распредели равномерно.',
+          'Хороший вопрос! Могу подсказать полезные ресурсы для изучения этой темы. Также рекомендую записывать ключевые моменты в конспект.'
+        ];
+
+        const randomResponse = responses[Math.floor(Math.random() * responses.length)];
+        aiMsg.innerHTML = `<div class="ai-message-bubble">${randomResponse}</div>`;
+        messagesContainer.appendChild(aiMsg);
+
+        // Scroll to bottom
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }, 1000);
+
+      // Scroll to bottom
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    // Demo notification on load
+    setTimeout(() => {
+      console.log('✨ RezoFlow готов к работе!');
+    }, 1000);
+  </script>
+
+</body>
+</html>

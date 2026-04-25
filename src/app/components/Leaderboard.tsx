@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trophy, RefreshCw, Medal } from 'lucide-react';
+import { Trophy, RefreshCw, Medal, ChevronRight } from 'lucide-react';
 import { apiRequest } from '../utils/api';
 
 export interface LeaderboardEntry {
@@ -15,6 +15,7 @@ interface LeaderboardProps {
   currentUserEmail?: string;
   title?: string;
   listOnly?: boolean;
+  onSelectStudent?: (entry: LeaderboardEntry, rank: number) => void;
 }
 
 function getLevel(totalXp: number): number {
@@ -31,7 +32,7 @@ function getLevel(totalXp: number): number {
 
 const MEDALS = ['🥇', '🥈', '🥉'];
 
-export function Leaderboard({ currentUserEmail, title = 'Рейтинг учеников', listOnly = false }: LeaderboardProps) {
+export function Leaderboard({ currentUserEmail, title = 'Рейтинг учеников', listOnly = false, onSelectStudent }: LeaderboardProps) {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -133,6 +134,7 @@ export function Leaderboard({ currentUserEmail, title = 'Рейтинг учен
               const rank = index + 1;
               const isMe = entry.email === currentUserEmail;
               const level = getLevel(entry.xp);
+              const clickable = !!onSelectStudent;
 
               return (
                 <motion.div
@@ -141,16 +143,19 @@ export function Leaderboard({ currentUserEmail, title = 'Рейтинг учен
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: Math.min(index * 0.025, 0.3) }}
+                  onClick={() => onSelectStudent?.(entry, rank)}
                   className={`flex items-center gap-3 px-4 py-3 rounded-2xl border transition-all ${
+                    clickable ? 'cursor-pointer' : ''
+                  } ${
                     isMe
-                      ? 'bg-primary/15 border-primary/35 shadow-[0_0_20px_rgba(139,92,246,0.12)]'
+                      ? 'bg-primary/15 border-primary/35 shadow-[0_0_20px_rgba(139,92,246,0.12)] hover:bg-primary/20'
                       : rank === 1
-                      ? 'bg-yellow-500/[0.06] border-yellow-500/20'
+                      ? 'bg-yellow-500/[0.06] border-yellow-500/20 hover:bg-yellow-500/10'
                       : rank === 2
-                      ? 'bg-slate-400/[0.05] border-slate-400/15'
+                      ? 'bg-slate-400/[0.05] border-slate-400/15 hover:bg-slate-400/10'
                       : rank === 3
-                      ? 'bg-amber-700/[0.05] border-amber-700/20'
-                      : 'bg-white/[0.02] border-white/5 hover:bg-white/[0.04]'
+                      ? 'bg-amber-700/[0.05] border-amber-700/20 hover:bg-amber-700/10'
+                      : 'bg-white/[0.02] border-white/5 hover:bg-white/[0.05]'
                   }`}
                 >
                   {/* Rank badge */}
@@ -203,6 +208,9 @@ export function Leaderboard({ currentUserEmail, title = 'Рейтинг учен
                       {entry.xp.toLocaleString('ru-RU')}
                     </span>
                     <span className="text-[10px] text-white/25 ml-0.5">XP</span>
+                    {clickable && (
+                      <ChevronRight className="w-3.5 h-3.5 text-white/20 mt-0.5 ml-auto" />
+                    )}
                   </div>
                 </motion.div>
               );

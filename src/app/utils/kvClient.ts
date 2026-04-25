@@ -63,13 +63,71 @@ export async function kvGet(key: string): Promise<any> {
 }
 
 export async function kvSet(key: string, value: any): Promise<void> {
-  const { error } = await supabase.from(TABLE).upsert({ key, value });
-  if (error) throw new Error(`kvSet error [${key}]: ${error.message}`);
+  const MAX_RETRIES = 3;
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // Exponential back-off: 400 ms, 800 ms
+      await new Promise(r => setTimeout(r, 400 * attempt));
+    }
+
+    try {
+      const { error } = await supabase
+        .from(TABLE)
+        .upsert({ key, value }, { onConflict: 'key' });
+
+      if (!error) return; // success
+
+      lastError = new Error(`kvSet error [${key}]: ${error.message}`);
+
+      // Only retry on transient schema-cache / connectivity errors
+      const msg = (error.message ?? '').toLowerCase();
+      const isRetryable =
+        msg.includes('schema cache') ||
+        msg.includes('retrying')     ||
+        msg.includes('connection')   ||
+        msg.includes('network')      ||
+        msg.includes('fetch')        ||
+        msg.includes('timeout');
+
+      if (!isRetryable) break; // permanent error – don't retry
+    } catch (err) {
+      // Supabase itself threw (e.g. TypeError: Failed to fetch when offline)
+      lastError = new Error(`kvSet error [${key}]: ${err instanceof Error ? err.message : String(err)}`);
+      // Always retry on thrown errors — they're transient by nature
+    }
+  }
+
+  throw lastError;
 }
 
 export async function kvDel(key: string): Promise<void> {
-  const { error } = await supabase.from(TABLE).delete().eq('key', key);
-  if (error) throw new Error(`kvDel error [${key}]: ${error.message}`);
+  const MAX_RETRIES = 3;
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      await new Promise(r => setTimeout(r, 400 * attempt));
+    }
+    try {
+      const { error } = await supabase.from(TABLE).delete().eq('key', key);
+      if (!error) return;
+      lastError = new Error(`kvDel error [${key}]: ${error.message}`);
+      const msg = (error.message ?? '').toLowerCase();
+      const isRetryable =
+        msg.includes('schema cache') ||
+        msg.includes('connection')   ||
+        msg.includes('network')      ||
+        msg.includes('fetch')        ||
+        msg.includes('timeout');
+      if (!isRetryable) break;
+    } catch (err) {
+      lastError = new Error(`kvDel error [${key}]: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (lastError) throw lastError;
 }
 
 export async function kvGetByPrefix(prefix: string): Promise<any[]> {
